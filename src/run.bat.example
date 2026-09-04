@@ -1,0 +1,20 @@
+@echo off
+REM ─────────────────────────────────────────────────────────────────────
+REM  run.bat.example  —  copy this to "run.bat" and fill in YOUR values.
+REM  "run.bat" is gitignored: your real SFTP password NEVER enters the repo.
+REM  (If you've ever pasted a password into a chat/tool, ROTATE it first.)
+REM
+REM  Most people generate this automatically by running the setup wizard:
+REM      python installer\setup.py
+REM ─────────────────────────────────────────────────────────────────────
+
+set NO_SFTP_HOST=your-sftp-host.example.net
+set NO_SFTP_PORT=2022
+set NO_SFTP_USER=your-sftp-username
+set NO_SFTP_PASS=your-sftp-password
+set NO_SFTP_LOGPATH=/home/container/console.log
+
+REM Pterodactyl power control + the game-command relay use apiKey.txt + panel.txt
+REM (see their .example files). The only secret in THIS file is the SFTP password.
+
+python "%~dp0no_mapvote_bot.py" %*

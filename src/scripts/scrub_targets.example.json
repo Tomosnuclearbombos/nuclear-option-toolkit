@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy this to scrub_targets.json (gitignored) and fill in YOUR real values. build_public_repo.py uses these as the find-and-replace anchors that strip your admin SteamID, server IP, and SFTP host from the published copies. Placeholders below trip nothing in the secret scan.",
+  "real_sid": "7656119XXXXXXXXXX",
+  "real_ip": "YOUR.SERVER.IP",
+  "real_host": "your-sftp-host.example.net"
+}

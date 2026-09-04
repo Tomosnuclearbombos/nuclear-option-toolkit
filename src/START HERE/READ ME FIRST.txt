@@ -1,0 +1,32 @@
+NUKE OPTION SERVER — HOW TO START  (e.g. after a PC restart)
+============================================================
+
+EASIEST:  double-click   START EVERYTHING.bat
+
+That opens TWO windows + a browser tab:
+   1) BOT window .............. ranks, map vote, chat, AI-aircraft limiter
+   2) WEB COMMAND CENTRE window  + a browser tab at  http://127.0.0.1:8770
+      (live map, players, activity feed, console, power buttons)
+
+Leave BOTH windows open while the server is running. To stop, just close them.
+
+------------------------------------------------------------
+PREFER TO START THEM SEPARATELY?
+   "1. Start Bot.bat"                -> starts the bot
+   "2. Start Web Command Centre.bat" -> starts the web command centre + browser
+
+------------------------------------------------------------
+GOOD TO KNOW
+   * Each launcher automatically stops any OLD copy first, so you can't end up
+     with two bots running (two bots = double chat messages). Always start the
+     bot from THIS folder, not by double-clicking run.bat directly.
+
+   * The dashboard is at  http://127.0.0.1:8770  (bookmark it).
+     If the map/page ever looks stale, press Ctrl+F5 to hard-refresh.
+
+   * The GAME SERVER itself runs on your game host, not your PC. These two
+     tools just connect to it - they don't start or stop the game server.
+     (Use the web command centre's power buttons, or your host's panel, for that.)
+
+   * Tip: you can right-click  START EVERYTHING.bat  ->  Send to  ->  Desktop
+     (create shortcut)  to get a one-click icon on your desktop.

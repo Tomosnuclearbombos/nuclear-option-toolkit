@@ -1,0 +1,110 @@
+# ───────────────────────────────────────────────────────────────────
+#  Credential-free + PII-free repo. NOTHING below may ever be committed.
+#  (See docs/PRE_UPLOAD_CHECKLIST.md — start a FRESH repo, scrub first.)
+# ───────────────────────────────────────────────────────────────────
+
+# secrets / credentials
+run.bat
+apiKey.txt
+panel.txt
+secrets.json
+*.key
+*.pem
+*.minisig
+.minisign/
+# scrub map with the owner's REAL SteamID/host — match at ANY depth (repo has code under src/,
+# so the old root-anchored 'scripts/…' pattern missed src/scripts/scrub_targets.json). NEVER commit this.
+scrub_targets.json
+scripts/scrub_targets.json
+src/scripts/scrub_targets.json
+
+# runtime state / PII (SteamIDs, names, chat)
+*.log
+*.jsonl
+ranks*.json*
+match_history.json
+dashboard_state.json
+schedule.json
+command_centre_settings.json
+console_filters.json
+plugin_commands.txt
+plugin_ranks.txt
+plugin_bans.txt
+bot_overrides.json
+*.done
+*.bak
+# 2026-07-28: the bot/web CC WRITE these into whatever folder they are run from, and running or
+# importing them straight out of the checkout (a --selftest, `import no_mapvote_bot` from src/)
+# drops them in src/ - where NOTHING here matched them and `git add -A` would have committed
+# them. `ranks*.json*` above only matches names STARTING with "ranks", so it caught none of
+# these. Files marked (PII) were verified to carry real third-party SteamIDs on a live install.
+# NOTE: a '#' only starts a comment at the START of a line here - never put one after a
+# pattern, it becomes part of the pattern.
+# (PII) verified to carry real third-party SteamIDs on a live install:
+ban_log.json
+prestige.json
+plugin_cfg_cache.json
+# moderation reports (names + chat) and per-player counters:
+plugin_reports.json
+grief_flood.json
+global_optin.json
+# operator/runtime config the bot regenerates with defaults when absent:
+rank_ladder.json
+shared_ranks.json
+mission_baseline.json
+mission_keys.json
+mission_pool.json
+votemap_config.json
+server_messages.json
+system_messages.json
+faction_colours.json
+srvcfg_pending.json
+# deploy markers (deployed_plugin.* is also covered further down)
+deployed_*.json
+
+# user-installed config (lives in ~/.nuke-option-toolkit, but ignore here too)
+config.json
+
+# deploy state / binaries
+deployed_plugin.*
+pending_plugin.*
+release_out/
+*.dll
+
+# machine-generated dev dumps / harness
+docs/_*.json
+.claude/
+AGENTS.md
+__pycache__/
+*.pyc
+
+# bulk / backups / build
+archive/
+backups/
+_server_backup/
+map_backup_*/
+mapdata/
+# build artifacts + vendored binaries (code is under src/; match at any depth)
+**/NukeStats/libs/
+**/NukeStats/bin/
+**/NukeStats/obj/
+**/NukeStats/bepinex_pack/
+**/NukeStats/bepinex_pack_win/
+
+# un-ignore the published templates + the trusted public key
+!run.bat.example
+!apiKey.txt.example
+!panel.txt.example
+!anz.nukestats.cfg.example
+!config.example.json
+!installer/trusted.pub
+!scripts/scrub_targets.example.json
+
+# --- hardening (build_public_repo.py) ---
+*.lnk
+installer/sources.lock.json
+
+# runtime data dirs and locks (never publish - .nost-data holds host credentials)
+.nost-data/
+.demo-data/
+webcc.lock

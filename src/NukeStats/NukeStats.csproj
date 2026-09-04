@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>NukeStats</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <!-- Unity Mono plugins don't want the framework folder appended to bin/ -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EnableDefaultItems>true</EnableDefaultItems>
+  </PropertyGroup>
+
+  <!-- never compile decompiled reference dumps if present -->
+  <ItemGroup>
+    <Compile Remove="_decomp\**\*.cs" />
+  </ItemGroup>
+
+  <!--
+    Drop the referenced DLLs into a sibling  ./libs/  folder before building.
+    Get them from:
+      * the server container: NuclearOptionServer_Data/Managed/  (Assembly-CSharp*.dll,
+        UnityEngine*.dll, Mirage.dll)  [pull them with the bot's "get" admin flag]
+      * the BepInEx pack:     BepInEx/core/  (BepInEx.dll, 0Harmony.dll)
+    Private=false means: do not copy these into the output (they already exist on the server).
+  -->
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>libs/BepInEx.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>libs/0Harmony.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>libs/Assembly-CSharp.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>libs/Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>libs/UnityEngine.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>libs/UnityEngine.CoreModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <!-- Only needed if you switch to Globals.AuthenticatedPlayers enumeration -->
+    <Reference Include="Mirage">
+      <HintPath>libs/Mirage.dll</HintPath><Private>false</Private>
+    </Reference>
+    <!-- Notify ACK RTT probe (NetworkPlayer.Send&lt;T&gt;(msg, INotifyCallBack)); present in game Managed -->
+    <Reference Include="Mirage.SocketLayer">
+      <HintPath>libs/Mirage.SocketLayer.dll</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

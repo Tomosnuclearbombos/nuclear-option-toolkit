@@ -1,0 +1,188 @@
+{
+  "schema_version": 2,
+  "manifest_version": "2026.06.29",
+  "default_repo": "Tomosnuclearbombos/nuclear-option-toolkit",
+  "_note": "Verified upstream sources + in-repo toolkit files for each Nuclear Option install option. Binaries come from Steam (SteamCMD app 3930080), NOT GitHub. The Pterodactyl egg is community-authored in pterodactyl/game-eggs. BepInEx must be 5.4.x (Unity Mono), never 6.x/IL2CPP. Toolkit pieces (bot/web-CC/relay/launchers/config) ship INSIDE this repo: own-PC installs copy them locally; external installs push them over SFTP. 'target' = game (server dir) or admin (the always-on PC running bot+web-CC).",
+
+  "options": {
+    "own_pc_windows":       ["steamcmd-bootstrap-win",   "server-binaries", "bepinex-win",   "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"],
+    "own_pc_linux":         ["steamcmd-bootstrap-linux", "server-binaries", "bepinex-linux", "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"],
+    "external_linux_ptero": ["ptero-egg",                "server-binaries", "bepinex-linux", "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"],
+    "external_windows":     ["steamcmd-bootstrap-win",   "server-binaries", "bepinex-win",   "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"],
+    "add_to_existing_win":  ["bepinex-win",              "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"],
+    "add_to_existing_linux":["bepinex-linux",            "nukestats-plugin", "toolkit-relay", "toolkit-bot", "toolkit-webcc", "toolkit-launchers", "toolkit-config"]
+  },
+
+  "option_meta": {
+    "own_pc_windows":        { "deploy": "local", "platform": "windows", "panel": false, "installs_binaries": true,  "doorstop": "winhttp" },
+    "own_pc_linux":          { "deploy": "local", "platform": "linux",   "panel": false, "installs_binaries": true,  "doorstop": "wrapper" },
+    "external_linux_ptero":  { "deploy": "sftp",  "platform": "linux",   "panel": true,  "installs_binaries": false, "doorstop": "wrapper" },
+    "external_windows":      { "deploy": "sftp",  "platform": "windows", "panel": false, "installs_binaries": true,  "doorstop": "winhttp" },
+    "add_to_existing_win":   { "deploy": "auto",  "platform": "windows", "panel": false, "installs_binaries": false, "doorstop": "winhttp" },
+    "add_to_existing_linux": { "deploy": "auto",  "platform": "linux",   "panel": false, "installs_binaries": false, "doorstop": "wrapper" }
+  },
+
+  "dependencies": {
+    "server-binaries": {
+      "name": "Nuclear Option Dedicated Server",
+      "role": "game", "target": "game", "required": true, "platform": "any", "arch": "x64",
+      "fetch": { "method": "steamcmd", "appid": 3930080, "login": "anonymous", "validate": true },
+      "provided_by_host": ["external_linux_ptero"],
+      "dest": ".",
+      "latest": { "how": "steamcmd_always_latest" },
+      "integrity": { "type": "steamcmd_validate" },
+      "offline": {
+        "official_url": "https://steamdb.info/app/3930080/",
+        "filename": "(a game folder, not a file)",
+        "instructions": "Run `steamcmd +force_install_dir <dir> +login anonymous +app_update 3930080 validate +quit` on any internet-connected machine, then point the installer at <dir>. There is no GitHub mirror of the binaries."
+      }
+    },
+
+    "steamcmd-bootstrap-win": {
+      "name": "SteamCMD (Windows)",
+      "role": "tool", "target": "game", "required": false, "platform": "windows",
+      "fetch": { "method": "http-zip", "url": "https://media.steampowered.com/installer/steamcmd.zip" },
+      "dest": "steamcmd",
+      "latest": { "how": "evergreen_self_updating" },
+      "integrity": { "type": "sha256_tofu" },
+      "skip_if_present": "steamcmd.exe",
+      "offline": { "official_url": "https://media.steampowered.com/installer/steamcmd.zip", "filename": "steamcmd.zip" }
+    },
+    "steamcmd-bootstrap-linux": {
+      "name": "SteamCMD (Linux)",
+      "role": "tool", "target": "game", "required": false, "platform": "linux",
+      "fetch": { "method": "http-zip", "url": "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" },
+      "dest": "steamcmd",
+      "latest": { "how": "evergreen_self_updating" },
+      "integrity": { "type": "sha256_tofu" },
+      "skip_if_present": "steamcmd.sh",
+      "offline": { "official_url": "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz", "filename": "steamcmd_linux.tar.gz" }
+    },
+
+    "bepinex-linux": {
+      "name": "BepInEx (Unity Mono, Linux x64)",
+      "role": "modloader", "target": "game", "required": true, "platform": "linux", "arch": "x64",
+      "fetch": {
+        "method": "github-release", "repo": "BepInEx/BepInEx",
+        "tag_filter": "^v5\\.4\\.", "asset_regex": "^BepInEx_linux_x64_.*\\.zip$",
+        "fallback": { "method": "thunderstore", "namespace": "BepInEx", "package": "BepInExPack" }
+      },
+      "vendored": "NukeStats/bepinex_pack",
+      "dest": ".",
+      "latest": { "how": "github_releases_filtered" },
+      "integrity": { "type": "sha256_tofu", "sha256": "" },
+      "post": ["extract", "chmod_exec:libdoorstop.so", "merge_startup:doorstop_linux"],
+      "offline": { "filename": "BepInEx_linux_x64_*.zip", "official_url": "https://github.com/BepInEx/BepInEx/releases" }
+    },
+    "bepinex-win": {
+      "name": "BepInEx (Unity Mono, Windows x64)",
+      "role": "modloader", "target": "game", "required": true, "platform": "windows", "arch": "x64",
+      "fetch": {
+        "method": "github-release", "repo": "BepInEx/BepInEx",
+        "tag_filter": "^v5\\.4\\.", "asset_regex": "^BepInEx_win_x64_.*\\.zip$",
+        "fallback": { "method": "thunderstore", "namespace": "BepInEx", "package": "BepInExPack" }
+      },
+      "dest": ".",
+      "latest": { "how": "github_releases_filtered" },
+      "integrity": { "type": "sha256_tofu", "sha256": "" },
+      "post": ["extract"],
+      "offline": { "filename": "BepInEx_win_x64_*.zip", "official_url": "https://github.com/BepInEx/BepInEx/releases" }
+    },
+
+    "ptero-egg": {
+      "name": "Pterodactyl egg (Nuclear Option)",
+      "role": "egg", "target": "panel", "required": true, "platform": "any",
+      "fetch": {
+        "method": "github-raw", "repo": "pterodactyl/game-eggs",
+        "branch": "main", "path": "nuclear_option/egg-nuclear-option.json"
+      },
+      "drift_check": { "compare_field": "exported_at" },
+      "dest": "cache/egg-nuclear-option.json",
+      "latest": { "how": "github_raw_head" },
+      "integrity": { "type": "sha256_tofu" },
+      "post": ["merge_startup:doorstop_linux", "set_var:MODDED_SERVER=true"],
+      "offline": { "filename": "egg-nuclear-option.json",
+        "official_url": "https://github.com/pterodactyl/game-eggs/blob/main/nuclear_option/egg-nuclear-option.json" }
+    },
+
+    "nukestats-plugin": {
+      "name": "NukeStats plugin",
+      "role": "plugin", "target": "game", "required": true, "platform": "any",
+      "fetch": {
+        "method": "github-release", "repo": "${UPDATE_REPO}",
+        "asset_regex": "^NukeStats\\.dll$", "sig_asset": "NukeStats.dll.minisig", "sha_asset": "NukeStats.dll.sha256"
+      },
+      "config_repo_key": "update.github_repo",
+      "dest": "BepInEx/plugins/NukeStats.dll",
+      "latest": { "how": "github_release_latest" },
+      "integrity": { "type": "sha256_and_minisign", "pubkey": "trusted.pub" },
+      "offline": { "filename": "NukeStats.dll", "official_url": "(your toolkit GitHub Releases page)" }
+    },
+
+    "toolkit-relay": {
+      "name": "Toolkit relay (localhost remote-command bridge)",
+      "role": "toolkit", "target": "game", "required": true, "platform": "any",
+      "fetch": { "method": "repo-dir", "src": "relay", "files": ["no_relay.py", "no_relay.pl"] },
+      "dest": ".",
+      "latest": { "how": "toolkit_self_update" },
+      "integrity": { "type": "repo" },
+      "offline": { "filename": "(ships with the toolkit)", "official_url": "(your toolkit GitHub)" }
+    },
+    "toolkit-bot": {
+      "name": "Map-vote / ranks bot",
+      "role": "toolkit", "target": "admin", "required": true, "platform": "any",
+      "fetch": { "method": "repo-file", "src": "no_mapvote_bot.py" },
+      "dest": "no_mapvote_bot.py",
+      "latest": { "how": "toolkit_self_update" },
+      "integrity": { "type": "repo" },
+      "offline": { "filename": "(ships with the toolkit)", "official_url": "(your toolkit GitHub)" }
+    },
+    "toolkit-webcc": {
+      "name": "Web command centre",
+      "role": "toolkit", "target": "admin", "required": true, "platform": "any",
+      "fetch": { "method": "repo-dir", "src": ".",
+        "files": ["cc_web.py", "webcc.html", "command_centre.py", "map_atlas.py", "settings_catalogue.json", "heartland_map.png", "ignus_map.png"] },
+      "dest": ".",
+      "latest": { "how": "toolkit_self_update" },
+      "integrity": { "type": "repo" },
+      "offline": { "filename": "(ships with the toolkit)", "official_url": "(your toolkit GitHub)" }
+    },
+    "toolkit-launchers": {
+      "name": "Launcher scripts",
+      "role": "toolkit", "target": "admin", "required": false, "platform": "any",
+      "fetch": { "method": "repo-dir", "src": ".",
+        "files": ["webcc.bat", "commandcentre.bat", "deploy.bat", "say.bat", "status.bat", "endmission.bat", "run_keepalive.bat"] },
+      "dest": ".",
+      "latest": { "how": "toolkit_self_update" },
+      "integrity": { "type": "repo" },
+      "offline": { "filename": "(ships with the toolkit)", "official_url": "(your toolkit GitHub)" }
+    },
+    "toolkit-config": {
+      "name": "Generated config + plugin cfg",
+      "role": "config", "target": "admin", "required": true, "platform": "any",
+      "fetch": { "method": "generated", "produces": ["config.json", "secrets.json", "anz.nukestats.cfg", "run.bat"] },
+      "dest": ".",
+      "latest": { "how": "wizard_generated" },
+      "integrity": { "type": "generated" },
+      "offline": { "filename": "(generated by the wizard)", "official_url": "(n/a)" }
+    }
+  },
+
+  "startup_blocks": {
+    "doorstop_linux": "mkdir -p ./logs; python3 no_relay.py 0.0.0.0:${QUERY_PORT} 127.0.0.1:${GAME_PORT} & export LD_LIBRARY_PATH=\"$(pwd):$(pwd)/linux64:$LD_LIBRARY_PATH\"; export DOORSTOP_ENABLED=1; export DOORSTOP_TARGET_ASSEMBLY=\"$(pwd)/BepInEx/core/BepInEx.Preloader.dll\"; export LD_PRELOAD=\"$(pwd)/libdoorstop.so:$LD_PRELOAD\"; ./NuclearOptionServer.x86_64 -batchmode -nographics -logFile ./logs/console.log -limitframerate 60 -ServerRemoteCommands ${GAME_PORT}",
+    "_doorstop_linux_note": "Single-line Pterodactyl/Linux Startup. Substitute ${GAME_PORT} (default 7777) and ${QUERY_PORT} (default 7778). Windows needs none of this — winhttp.dll + doorstop_config.ini next to the .exe auto-inject."
+  },
+
+  "ports": { "game_default": 7777, "query_default": 7778, "rule": "game != query" },
+
+  "decisions": {
+    "binaries_source": "steamcmd app 3930080 (NOT github; Shockfront github = docs only)",
+    "egg_drift": "vendor a known-good egg copy; poll upstream exported_at/commit and WARN only, never auto-adopt HEAD",
+    "bepinex_line": "5.4.x Unity Mono only (tag_filter ^v5\\.4\\.); reject 6.x/IL2CPP",
+    "query_port": "prompt; default 7778 (Shockfront guide); validate game(7777) != query",
+    "macos_server": "not offered (no macOS depot); host via Linux/Windows/panel",
+    "plugin_repo": "config-driven (update.github_repo); default Tomosnuclearbombos/nuclear-option-toolkit",
+    "toolkit_files": "bot/web-CC/relay/launchers/config ship in-repo (repo-file/repo-dir/generated); placed local for own-PC, pushed via SFTP for external",
+    "air_gapped_binaries": "online-required step; run SteamCMD once on a connected machine then copy the game dir"
+  }
+}

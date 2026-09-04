@@ -1,0 +1,23 @@
+MAP BUILD TOOLS  (developer / occasional use)
+=============================================
+These regenerate the live-map data from the in-game grid SCREENSHOTS.
+
+TO REBUILD the maps (after changing heartland.png / ignus.png, or the base list
+in build_map_atlas.py):
+
+    from the project ROOT, run:    python map-build\build_map_atlas.py
+
+It writes the outputs to the ROOT folder where the bot + web command centre read them:
+    map_atlas.py            (bounds, grid model, bases, coarse terrain)
+    heartland_map.png       (terrain image)
+    ignus_map.png           (terrain image)
+Then relaunch webcc.bat and hard-refresh the browser (Ctrl+F5) to see the change.
+
+FILES
+  build_map_atlas.py  - main generator: label-calibration + terrain PNG + bases + atlas
+  label_calibrate.py  - reads the printed grid labels -> exact pixel<->world transform (imported)
+  analyze_maps.py     - colour-marker (airbase) detection (imported)
+  calibrate.py        - RANSAC cross-check from known airbase refs (standalone sanity tool)
+  gridfit.py          - grid-line detector cross-check (standalone sanity tool)
+  heartland.png       - SOURCE in-game grid screenshot (Heartland)
+  ignus.png           - SOURCE in-game grid screenshot (Ignus)

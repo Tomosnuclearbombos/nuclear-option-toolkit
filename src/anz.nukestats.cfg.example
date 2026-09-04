@@ -1,0 +1,137 @@
+## anz.nukestats.cfg.example — full default plugin config (BepInEx).
+## Copy to BepInEx/config/anz.nukestats.cfg on the server, OR let the setup wizard
+## generate one from your feature choices. Tune everything LIVE in the web CC Settings menu.
+
+[AILimit]
+## Performance guard: caps AI aircraft and clears stuck ones; only ever removes AI, never players.
+Enforce = true
+
+## Max AI aircraft flying per faction; the excess (grounded/lowest first) is destroyed.
+PerTeamAICap = 32
+
+## Max total aircraft (AI + players); when exceeded, AI is removed from the busiest side, never a player.
+TotalAircraftCap = 64
+
+## A grounded AI that hasn't moved for this many seconds is cleared to free a clogged runway. 0 = off.
+StuckSeconds = 45
+
+## Movement radius in metres under which a grounded AI counts as 'not moving' for the stuck check.
+StuckRadiusMetres = 25
+
+
+[Admin]
+## Comma-separated SteamIDs allowed to use in-game team commands (!move/!spec/!join/!balance).
+SteamIds = 
+
+
+[Balance]
+## PvP only: stops a player from joining a side that is already too far ahead.
+Enforce = true
+
+## How many players one side may be ahead before balancing kicks in (2 = a 2-player gap is fine, only a 3+ gap acts).
+MaxDifference = 2
+
+## PvP only: when a side is too far ahead, actually move the best-fit player to the smaller side (off = block-join only).
+AutoMove = true
+
+## Seconds between auto-balance checks.
+RecheckSeconds = 6
+
+## Minimum seconds between two auto-balance moves, to stop churn.
+MoveDebounce = 20
+
+## Auto-balance never runs unless at least this many humans are on; small lobbies are left alone.
+MinPlayers = 6
+
+## After teams go unbalanced, broadcast a warning and wait this many seconds before moving anyone (default 5 min).
+WarnSeconds = 300
+
+## Once moved, a player won't be moved again for this many games, spreading the burden around.
+MoveExemptGames = 2
+
+## Never move a player who joined less than this many seconds ago (default 15 min); strongest balance immunity. 0 = off.
+NewJoinerSeconds = 900
+
+
+[Chat]
+## The plugin writes its own chat and join lines (faction colours; rank tags when the rank ladder is on). OFF = chat stays completely native - no rewriting at all.
+CustomChat = true
+
+## Replaces a whole message with a canned line if it contains a racist slur; ordinary swearing is left alone.
+ProfanityFilter = true
+
+
+[Cleanup]
+## Periodically despawn lingering ejected pilots on the map to cut clutter and load.
+DismountedPilots = true
+
+## Seconds a dismounted pilot may linger before being cleaned up.
+PilotLifetimeSeconds = 300
+
+
+[Flood]
+## NOTE (1.2.4): the fleet-order rate limit (Enforce / FleetOrdersPerSec / FleetOrderBurst / OrderSpamKickSeconds)
+## was REMOVED. The game already caps each player at ~5 accepted move-commands/sec, ours counted right-clicks rather
+## than network messages, and it had a false-positive history. Nothing here rate-limits unit move-orders any more.
+
+## Logs (throttled) the name/SteamID of a connection whose inbound RPCs are being rate-dropped by the inbound guard below.
+LogDrops = true
+
+## Defence-in-depth: silently drops RPCs aimed at already-destroyed objects to kill a disconnect-storm amplifier; needs a restart (gates a patch). Applies live; if the patch failed to bind at load it will not re-bind without a server restart.
+DropDeadNetIdRpcs = true
+
+## Ordering a unit the server has no record of at all (the classic order-a-dead-unit exploit): kick after this many such RPCs in 10s. An order that was in flight when the unit legitimately died is never counted. 0 = drop only. Needs DropDeadNetIdRpcs.
+DeadNetIdKickStrikes = 3
+
+
+[Forfeit]
+## PvP only: lets a team vote to surrender the match via !forfeit (majority needed).
+Enabled = true
+
+## Seconds before a team can start another forfeit vote (anti-spam); the vote window is min(60, this).
+CooldownSeconds = 90
+
+
+[KillFeed]
+## Hide the game's native "repaired / rearmed / refueled" notification when a player services at a base.
+HideRepairMessages = true
+
+
+[Mission]
+## PvP matches: every player starts at at least this in-game rank (funds/loadout floor). 0 = off; PvE unaffected.
+PvpStartingRank = 3
+
+
+[PvE]
+## PvE co-op: when the mission timer runs out and humans haven't won, declare them defeated instead of silently rotating.
+TimeoutForceDefeat = true
+
+
+[Scoring]
+## Points awarded to every player on the winning side at match end.
+WinPoints = 200
+
+## Bonus points for the top scorer of the match.
+FirstPlace = 500
+
+## Bonus points for the second-highest scorer of the match.
+SecondPlace = 250
+
+## Bonus points for the third-highest scorer of the match.
+ThirdPlace = 100
+
+
+[Stats]
+## Seconds between full per-player stats snapshots emitted to the bot.
+SnapshotSeconds = 10
+
+
+[Swap]
+## Altitude in metres the brief Cricket is spawned at during !swapteam/!forceteamswap before ejecting; raise to 3000 if a crash is seen.
+Altitude = 2500
+
+
+[Teamkill]
+## Auto-punishes friendly fire: 1st = eject+warning, 2nd = kick+rank reset, 3rd = persistent ban.
+Enforce = true
+
