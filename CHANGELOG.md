@@ -2,6 +2,23 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [1.9.1] 2026-10-12
+
+* **Unnamed players fixed.** A new account with no Steam profile showed as "Pilot" everywhere, given Steam
+  has no name to give. The plugin now uses the name the player's own game sent when they joined, and if
+  Steam finds the real name later that one takes over. Of note, the player's game picks that name, so it's
+  only used when Steam has nothing.
+* **Wrong rank tags in the activity feed fixed.** The feed tags lines by name, so a new player shown as
+  Pilot got the rank of a different player who is actually called Pilot. A name shared by two or more
+  accounts, or the stand-in for a player with no name, now gets no tag, and the line shows exactly what
+  the bot wrote.
+* **Explosions fixed in the NOBlackBox fork.** The same explosion was being recorded again every half
+  second for about 10 seconds, which is why explosions grew slowly out to a few kilometres on the live
+  map and in Tacview. Each one is now recorded once, at its real blast radius. The download on the
+  [fork's releases page](https://github.com/Tomosnuclearbombos/NOBlackBox/releases) is now the whole
+  `NOBlackBox` folder, given the recorder won't start without the unit files that come with it and the
+  last release only had the DLL.
+
 ## [1.9.0] 2026-10-10
 
 This is the first public release since 1.5.0. It brings the public build up to the plugin, bot and

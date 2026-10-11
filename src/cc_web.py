@@ -1098,7 +1098,7 @@ _ACT_NAME_RES = (("CHAT", re.compile(r"^\[CHAT\]\s+(.+?): ")),
                  ("JOIN", re.compile(r"^\[JOIN\]\s+(.+?) joined\b")),
                  ("LEFT", re.compile(r"^\[LEFT\]\s+(.+?) left\b")))
 _JOIN_RANK_RE = re.compile(r" joined\s+\(\[([^\]]+)\] ([^,]+),")
-_NAME_INDEX = {"key": None, "map": {}}               # ranks.json name -> sid (rebuilt when the ranks cache changes)
+_NAME_INDEX = {"key": None, "map": {}, "dup": set()}  # ranks.json name -> sid (rebuilt when the ranks cache changes)
 _NAME_RANK_CACHE = {}                                # name -> (until, [label, colour, title] or None)
 
 
@@ -1117,15 +1117,19 @@ def _name_index():
     if _NAME_INDEX["key"] is d:
         return _NAME_INDEX["map"]
     best = {}
+    seen, dup = set(), set()                         # names on two or more accounts: no guessed tag (see _act_names)
     for sid, r in d.items():
         nm = str((r or {}).get("name") or "").strip()
         if not nm:
             continue
+        if nm in seen:
+            dup.add(nm)
+        seen.add(nm)
         tp = float((r or {}).get("timePlayed", 0) or 0)
         cur = best.get(nm)
         if cur is None or tp > cur[1]:               # the same name on two accounts: the one that played most
             best[nm] = (sid, tp)
-    _NAME_INDEX["key"], _NAME_INDEX["map"] = d, {k: v[0] for k, v in best.items()}
+    _NAME_INDEX["key"], _NAME_INDEX["map"], _NAME_INDEX["dup"] = d, {k: v[0] for k, v in best.items()}, dup
     return _NAME_INDEX["map"]
 
 
@@ -1154,15 +1158,23 @@ def _act_names(lines, live_players):
     tag (exactly what the Players table shows); everyone else is looked up in ranks.json by name. A join line
     whose player cannot be found falls back to the tag the line itself carries."""
     out = {}
-    live = {}
+    live, live_n = {}, {}
     for p in live_players or []:
         if isinstance(p, dict) and p.get("name"):
             live[str(p["name"])] = [p.get("rank_abbr") or "", p.get("rank_color") or "", p.get("rank_name") or ""]
+            live_n[str(p["name"])] = live_n.get(str(p["name"]), 0) + 1
     now = time.time()
     idx = None
+    standin = getattr(bot, "WELCOME_FALLBACK_NAME", "Pilot")
     for line in lines:
         tag, nm = _act_line_name(line)
         if not nm or nm in out:
+            continue
+        # 10-11: a tag found by NAME is a guess when the name is not unique. The bot's stand-in for a player
+        # Steam never named, or a name two accounts share, gets no tag, so the line shows what the bot wrote
+        # (a join line carries its own tag, worked out from the SteamID). A new player's join read [GPCAPT]
+        # from a different player who is really called Pilot.
+        if nm == standin or live_n.get(nm, 0) > 1:
             continue
         if nm in live and live[nm][0]:
             out[nm] = live[nm]
@@ -1174,6 +1186,8 @@ def _act_names(lines, live_players):
             continue
         if idx is None:
             idx = _name_index()
+        if nm in _NAME_INDEX.get("dup", ()) and nm not in live:
+            continue
         sid = idx.get(nm)
         val = _rank_full(sid) if sid else None
         if val is None and tag == "JOIN":

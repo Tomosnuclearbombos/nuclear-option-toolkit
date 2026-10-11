@@ -180,8 +180,8 @@ is the build my servers run, and KopterBuzz gave the OK to fork it. Pilot names 
 recordings, and so do gun rounds from where they were fired to where they ended up. It also has a fair
 bit of performance work and two memory leak fixes.
 
-1. Download `NOBlackBox.dll` from the fork's releases and put it in `BepInEx/plugins/` on the game
-   server, next to `NukeStats.dll`.
+1. Download the NOBlackBox zip from the fork's releases and unzip it into `BepInEx/plugins/` on the
+   game server, so the `NOBlackBox` folder sits next to `NukeStats.dll`.
 2. Start the server once so it writes `BepInEx/config/xyz.KopterBuzz.NOBlackBox.cfg`, then set
    `OutputPath = /home/container/tacview/`, which is the folder the live map reads. Of note, set
    `RecordSteamID = false` as well if you share the recordings, given it writes each player's Steam

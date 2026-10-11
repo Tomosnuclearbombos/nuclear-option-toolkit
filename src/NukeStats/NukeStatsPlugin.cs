@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.0";
+        public const string Version = "1.9.1";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -3326,9 +3326,38 @@ namespace NukeStats
                     }
                     MaybeWebNameLookup(sid);   // 1.1.38: about to show the placeholder -> ask Steam now
                 }
+                // 1.9.1 (owner 2026-10-11): Steam has no name for this account (a new account with no community
+                // profile, or the web lookup refused), so the name the player's own game reported when it connected
+                // stands in for the placeholder. Not cached into RawNames: the moment Steam or the web lookup resolves,
+                // that name wins on the next call.
+                string reported = ReportedName(p);
+                if (reported != null) return reported;
                 return PlaceholderName(sid);
             }
             catch { return "?"; }
+        }
+
+        static readonly System.Text.RegularExpressions.Regex _steamIdIn =
+            new System.Text.RegularExpressions.Regex(@"7656119\d{10}");
+
+        // The name the client sent with its connection (the game keeps it in the auth data; on a server whose Steam
+        // lookup fails the game's own PlayerName drops it). Cleaned the way the game cleans a Steam name, and refused
+        // when it is a placeholder, digits only, or carries a Steam ID, so a SteamID can never be shown as a name.
+        static string ReportedName(Player p)
+        {
+            try
+            {
+                string n = p.GetAuthData()?.ClientReportedSteamName;
+                if (string.IsNullOrWhiteSpace(n)) return null;
+                n = (n.SanitizeRichText(32) ?? "").Trim();
+                if (!IsResolved(n) || _steamIdIn.IsMatch(n)) return null;
+                bool digitsOnly = true;
+                foreach (char ch in n) { if (!char.IsDigit(ch) && !char.IsWhiteSpace(ch)) { digitsOnly = false; break; } }
+                if (digitsOnly) return null;
+                if (string.Equals(n, "Pilot", StringComparison.OrdinalIgnoreCase)) return null;
+                return n;
+            }
+            catch { return null; }
         }
 
         // User-facing display name for plugin-composed chat/broadcast lines: "[TAG] Name" while
