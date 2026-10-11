@@ -281,7 +281,7 @@ const PRESETS={
   full:{name:'Full community',set:{}},   // all defaults (everything on)
   pvp:{name:'PvP-competitive',set:{'PvE.TimeoutForceDefeat':false}},
   pve:{name:'PvE co-op',set:{'Balance.Enforce':false,'Forfeit.Enabled':false,'PvE.TimeoutForceDefeat':true}},
-  minimal:{name:'Minimal (stats only)',set:{'Balance.Enforce':false,'AILimit.Enforce':true,'Forfeit.Enabled':false,'PvE.TimeoutForceDefeat':false}},
+  minimal:{name:'Minimal (stats only)',set:{'Balance.Enforce':false,'Forfeit.Enabled':false,'PvE.TimeoutForceDefeat':false}},
 };
 async function renderFeatures(p){
   if(!state.catalogue.length){const r=await api('/api/catalogue');state.catalogue=r.settings||[];

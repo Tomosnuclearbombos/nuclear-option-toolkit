@@ -47,6 +47,10 @@
       <HintPath>libs/Mirage.dll</HintPath><Private>false</Private>
     </Reference>
     <!-- Notify ACK RTT probe (NetworkPlayer.Send&lt;T&gt;(msg, INotifyCallBack)); present in game Managed -->
+    <!-- Perf pilot-animation and moving-parts switches (Animator, constraints): from the server's Managed folder -->
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>libs/UnityEngine.AnimationModule.dll</HintPath><Private>false</Private>
+    </Reference>
     <Reference Include="Mirage.SocketLayer">
       <HintPath>libs/Mirage.SocketLayer.dll</HintPath><Private>false</Private>
     </Reference>

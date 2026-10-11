@@ -1,6 +1,6 @@
 # Settings guide
 
-All 92 settings, in plain English. They're in the dashboard under **Settings → Game Settings**, and
+All 113 settings, in plain English. They're in the dashboard under **Settings → Game Settings**, and
 this page is the same list written out.
 
 Each one gives the name, what it does, and the value it ships with. You can change them while the
@@ -11,13 +11,13 @@ server is running, and most take effect on the next tick.
 - [Messages & Feed](#messages--feed), 2 settings
 - [Scoring & Ranks](#scoring--ranks), 6 settings
 - [Rank + Fund catch-up](#rank--fund-catch-up), 3 settings
-- [Match](#match), 13 settings
+- [Match](#match), 14 settings
 - [End of Match & Votes](#end-of-match--votes), 7 settings
 - [Team Balance](#team-balance), 17 settings
-- [Moderation](#moderation), 12 settings
+- [Moderation](#moderation), 18 settings
 - [Anti-Grief](#anti-grief), 24 settings
 - [PvE](#pve), 1 setting
-- [AI & Performance](#ai--performance), 7 settings
+- [AI & Performance](#ai--performance), 21 settings
 
 ## Messages & Feed
 
@@ -121,6 +121,11 @@ ON = annihilate ends PvP matches only. OFF = PvE co-op can also end when a side 
 ON = a side is wiped only with no planes AND no hangars to spawn from. OFF = no planes alone ends it, even if the side could still have rebuilt from hangars.
 
 *Default: `on`*
+
+### Annihilate: Excluded Missions
+Comma-separated mission-name prefixes on which the Annihilate auto-win never fires (case-insensitive). Blank = it can fire on every mission.
+
+*Default: ``*
 
 ### Forfeit Vote Cooldown
 Seconds before a team can start another forfeit vote (anti-spam); the vote window is min(60, this).
@@ -303,6 +308,36 @@ Adds altitude, airframe and a landed flag to the position feed; the panel's airc
 
 *Default: `on`*
 
+### High ping kicker: Average over (s)
+Seconds of ping readings averaged before anyone is judged, so a spike does not get anyone kicked.
+
+*Default: `30`, range 10–120*
+
+### High ping kicker: Enable
+When the server is busy, players whose AVERAGE ping stays at or above the limit get a private red warning and are kicked 60 seconds later unless it drops, highest ping first and never below the player threshold. A kick names them and their ping in chat. Rejoining with high ping gets them kicked again; a third kick keeps them out until the mission changes. Admins are exempt. Counts reset each mission.
+
+*Default: `on`*
+
+### High ping kicker: Ping limit (ms)
+Average ping at or above which a player counts as high ping.
+
+*Default: `250`, range 50–2000*
+
+### High ping kicker: PvE player threshold
+Co-op missions: the kicker is on while MORE than this many players are on (12 = on at 13) and never kicks the server below it.
+
+*Default: `12`, range 1–64*
+
+### High ping kicker: PvP player threshold
+PvP missions: the kicker is on while MORE than this many players are on (14 = on at 15) and never kicks the server below it.
+
+*Default: `14`, range 1–64*
+
+### High ping kicker: Warning time (s)
+Seconds between the private warning and the kick (and after a rejoin).
+
+*Default: `60`, range 10–300*
+
 ### Nuclear Collateral Window (s)
 Collateral window for nuke-scale blasts (yield over 200); the nuke verdict/warning is also delayed this long. Backward reach is effectively capped near 20s whatever you set, because kill evidence is only kept about 60s.
 
@@ -464,10 +499,55 @@ PvE co-op: when the mission timer runs out and humans haven't won, declare them 
 
 ## AI & Performance
 
-### AI Housekeeping (runs the stuck-AI clear)
-Master switch for AI housekeeping; the Stuck-AI Clear Time below runs on it, so OFF = stuck AI is never cleared. Also holds a loose background AI ceiling that mission caps normally keep the server under. Only ever removes AI aircraft, never players.
+### AI Airport Rotation: Enabled
+ON = spread AI aircraft spawns across nearby compatible friendly airports. OFF = use the game's normal airport choice. Preferred Airports sets how many airports share departures. Player spawns are unchanged.
 
 *Default: `on`*
+
+### AI Airport Rotation: Log Spawn Choices
+Log each accepted AI spawn's aircraft, airport and whether it used a preferred or fallback airport. For troubleshooting; leave OFF for normal use. Requires AI Airport Rotation ON.
+
+*Default: `off`*
+
+### AI Airport Rotation: Preferred Airports
+How many of the nearest compatible friendly airports share AI departures. 1 = one preferred airport; 3 = rotate across three. Other airports are fallback options when those cannot spawn. Requires AI Airport Rotation ON.
+
+*Default: `3`, range 1–8*
+
+### AI Spawns per Check
+Most AI aircraft a side may spawn in one of its 5-second deployment checks while it is short of AI (the game: 1), so the AI fills its slots faster after a mission starts or a big loss. The AI limit still applies. 1 = off.
+
+*Default: `3`, range 1–10*
+
+### AI Spawns: Busy Airfield Limit
+Extra spawns only while at least one of the side's airbases has this many or fewer AI aircraft on it, so a jammed airfield does not get more.
+
+*Default: `4`, range 0–40*
+
+### AI Spawns: Shortfall per Extra
+One extra spawn per check for about every this many AI aircraft the side is short of.
+
+*Default: `5`, range 1–40*
+
+### AI Taxi Fixes
+ON = AI planes get off the ground at busy airbases: the taxi check measures from the plane itself, the plane first in the takeoff queue keeps its place when it brakes, and the AI Taxi settings below apply. OFF = the game's own taxiing. Parts of Appulcake's AI Plane Unstuck (MIT).
+
+*Default: `on`*
+
+### AI Taxi: Braking Cone
+Width in degrees of the cone ahead in which a taxiing AI plane brakes for other planes. 180 = the game's own.
+
+*Default: `120`, range 30–180*
+
+### AI Taxi: Commit to Takeoff
+The AI plane first in a runway's takeoff queue stops braking for other planes and does not wait at runway crossings, so it commits to the runway and takes off.
+
+*Default: `on`*
+
+### AI Taxi: Landing Block Range
+A landing plane only stops AI taking off from that runway while it is on the runway or lined up within this many metres of it. 0 = the game's own (any plane cleared to land, about 2 to 2.5 km out).
+
+*Default: `750`, range 0–5000*
 
 ### Clean Up Ejected Pilots
 Periodically despawn lingering ejected pilots on the map to cut clutter and load.
@@ -479,22 +559,47 @@ Seconds a dismounted pilot may linger before being cleaned up.
 
 *Default: `300`, range 30–1800*
 
+### Hitch Log Threshold
+With Performance Timing and Frame Stages on, logs one line for any frame slower than this many milliseconds: which stages took the time, and whether a garbage collection ran. At most one line every 2 seconds. 0 = off.
+
+*Default: `80`, range 0–2000*
+
+### Performance Timing
+Measures where the server's frame time goes and writes one summary a minute (the bot keeps them in perf_log.csv). Switching it on freezes the server for about a second, once, 1 s into the next mission.
+
+*Default: `off`*
+
+### Performance Timing: Frame Stages
+With Performance Timing on, also times every stage of the engine's frame (physics, Update, network send and the rest). For a test only.
+
+*Default: `off`*
+
+### Physics Worker Threads
+How many worker threads the game uses for its physics jobs. 0 = the game's own choice (half the host's cores, 2 to 8). Changes within a second.
+
+*Default: `0`, range 0–16*
+
+### Server Frame Rate Target
+Frame rate the server aims for while a mission runs. 0 = the game's own (60). Above 60, a frame that finished early starts sooner instead of waiting out its slot; the physics stays at 60 steps a second either way. Never goes below 60. Higher costs more CPU.
+
+*Default: `0`, range 0–240*
+
 ### Server Tick Rate (Hz)
 Engine updates per second: higher = snappier AI and missile reactions (not physics) at more CPU cost. TO APPLY: save, run run.bat --setup-server, then restart the SERVER (drops players) - a plain panel restart keeps the old rate.
 
 *Default: `60`, range 30–120*
 
+### Skip Pilot Animation
+Stops the pilot body animation on the server (the pilot model in each cockpit and pilots on the ground after ejecting). Only the look of the model, which nobody sees on a server. The landing gear is left alone.
+
+*Default: `off`*
+
+### Skip Visual Moving Parts
+Stops purely visual moving parts on the server: the wake foam on ships and the hydraulic rams on the missile trucks and the howitzer. Nothing on aircraft is touched.
+
+*Default: `off`*
+
 ### Stats Snapshot Interval
 Seconds between full per-player stats snapshots sent to the bot.
 
 *Default: `10`, range 2–60*
-
-### Stuck-AI Clear Time
-A grounded AI that hasn't moved for this many seconds is cleared to free a clogged runway. 0 = off. Needs AI Housekeeping ON or this timer does nothing.
-
-*Default: `45`, range 0–300*
-
-### Stuck-AI Move Radius
-Metres a grounded AI must move within the clear time to count as not stuck. Needs AI Housekeeping ON.
-
-*Default: `25`, range 5–200*

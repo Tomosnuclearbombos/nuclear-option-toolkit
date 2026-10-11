@@ -122,6 +122,8 @@ PVP_MISSIONS = [
     "Carrier Duel",              # stock naval mode; Key CONFIRMED live 2026-07-02 (console: set-next-mission [BuiltIn,Carrier Duel] -> loaded)
 ]
 
+
+
 # Stock CO-OP missions (Tomo 2026-07-02 + wiki). The game ships co-op faction variants of the
 # big ops as their own missions — "<Op> Co-op as BDF/PALA" — and custom User missions are
 # weather/time EDITS of these (name + " - Dawn" etc.), so the bare names here are BUILT-IN and
@@ -136,6 +138,7 @@ BUILTIN_COOP_MISSIONS = [
     "Breakout",
     "13. Reprisal",
 ]
+
 
 # Candidate rotation Keys for missions whose exact server identity is unconfirmed, best guess
 # first (in-game display name == wire Name for every confirmed mission so far, e.g. Carrier Duel).
@@ -213,8 +216,15 @@ def pvp_family_members(family, exclude=()):
 
 # Current ballot, rebuilt each vote by open_vote(). Keys "1".."6" map to
 #   (group, mission_name, max_time_seconds, friendly_label)
-# 1-2 = random Escalation co-op, 3-4 = random Terminal Control co-op, 5-6 = PvP.
+# The !1..!N order is shuffled every vote (owner 2026-09-29), so no slot belongs to a mode.
 VOTE_OPTIONS = {}
+
+# TWO-STAGE VOTE (owner 2026-10-08): "first 45 seconds vote on the mission, second 45 seconds vote on the variant".
+# VOTE_STAGE["stage"] is 1 while players pick the mission, 2 while they pick its variant, 0 for a single-round
+# ballot. VOTE_SHORT holds the short round-2 labels ("Night") the chat lines show. Two rounds or one is the
+# votemap_config "vote_style" setting (_vote_two_stage()).
+VOTE_STAGE = {"stage": 0, "title": "", "what": "", "opened": 0.0}
+VOTE_SHORT = {}
 
 # ── FIX 3: TWO source-of-truth vote-timing knobs (baked defaults; the live values are loaded from the
 # deploy-protected .nost-data/votemap_timing.json below). VOTE_DURATION and APPROVAL_DURATION are ALIASES
@@ -652,6 +662,8 @@ AIR_TS             = 0.0      # when AIR was last updated (stale => hide the pan
 NET                = None     # latest connection-health/RTT-probe telemetry from the plugin's "net" line (Connection Stress panel)
 NET_TS             = 0.0      # when NET was last updated (stale => omit from state)
 LAST_FRAMETIME_MS  = None     # latest smoothed server frametime (ms) from the plugin's "net" line (webcc frametime box); None until seen
+PERF               = None     # 1.9.5: latest per-minute timing summary from the plugin's "perf" line (Perf.Timing on)
+PERF_TS            = 0.0      # when PERF was last updated
 PLAYER_RTT_MS      = {}       # steamid -> int RTT ms (plugin: Steam m_nPing preferred, Notify ACK fallback)
 ENT                = None     # latest {"a":[AI aircraft],"s":[ships]} from the plugin's "ent" line (live map; ~5s)
 ENT_TS             = 0.0      # when ENT was last updated (stale => omit from state)
@@ -843,6 +855,33 @@ def font_safe(text):
         return text
 
 
+_DAY_TAG = "[DAY]"         # 1.9.4: activity lines carry only a clock time; a [DAY] line marks each new date
+_ACT_DAY = [None]          # date text of the last [DAY] line written (None = not read from the file yet)
+
+
+def _day_text(d=None):
+    """'Sunday 4 October 2026' for a date (default today)."""
+    import datetime as _dt
+    d = d or _dt.date.today()
+    return f"{d.strftime('%A')} {d.day} {d.strftime('%B %Y')}"
+
+
+def _act_last_day():
+    """The date text of the newest [DAY] line in activity.log (from its last 1 MB), or ''."""
+    try:
+        with open(ACTIVITY_FILE, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 1_000_000))
+            data = f.read().decode("utf-8", "replace")
+        i = data.rfind("  " + _DAY_TAG)
+        if i < 0:
+            return ""
+        return data[i:].split("\n", 1)[0].split(_DAY_TAG, 1)[1].strip()
+    except OSError:
+        return ""
+
+
 def activity(msg, tag=""):
     """Append a timestamped, human-readable line to activity.log and echo it to the
     raw log too. `tag` (e.g. "MAP", "WIN") is padded to a fixed column so every line
@@ -853,9 +892,16 @@ def activity(msg, tag=""):
     except Exception:        # noqa: BLE001
         pass
     try:
+        today = _day_text()
+        if _ACT_DAY[0] is None:
+            _ACT_DAY[0] = _act_last_day()
+        stamp = time.strftime('%I:%M:%S %p')
         with open(ACTIVITY_FILE, "a", encoding="utf-8") as f:
-            f.write(f"{time.strftime('%I:%M:%S %p')}  {line}\n")
-    except OSError:
+            if _ACT_DAY[0] != today:                     # 1.9.4: the first line of a new day starts with its date
+                f.write(f"{stamp}  " + _DAY_TAG.ljust(8) + today + "\n")
+                _ACT_DAY[0] = today
+            f.write(f"{stamp}  {line}\n")
+    except Exception:                                    # noqa: BLE001 - logging must never crash the bot
         pass
 
 
@@ -891,8 +937,11 @@ STATE_WRITE_INTERVAL = 0.5        # rewrite dashboard_state.json every 0.5s; plu
 # presenting the stale headcount as live.
 STALE_RELAY_S        = 30.0       # relay silent this long -> roster/headcount is last-known, not live
 _RELAY_LAST_OK       = [time.time()]   # last positive get-player-list reply (roster poll stamps it)
-_CONSOLE_MIRROR_MAX  = 2_000_000  # bytes; past this the mirror is trimmed to the last N lines
-_MIRROR_KEEP         = 3000
+_CONSOLE_MIRROR_MAX  = 12_000_000 # bytes; past this the mirror is cut back to the newest _MIRROR_KEEP_BYTES
+_MIRROR_KEEP         = 3000       # (1.9.4: no longer used - the trim keeps bytes, not a line count)
+_MIRROR_KEEP_BYTES   = 8_000_000  # 1.9.4 (owner: "extend the history ... a lot longer"): was 2 MB / 3000 lines
+_ACTIVITY_MAX        = 12_000_000 # 1.9.4: activity.log past this is cut back to the newest _ACTIVITY_KEEP
+_ACTIVITY_KEEP       = 9_000_000  # ~100,000 lines, about a month on the busier server (was 1.5 MB / 5000 lines)
 ROSTER_BY_SID        = {}         # sid -> last get-player-list entry (faction for the table)
 
 
@@ -911,32 +960,111 @@ def mirror_console_batch(lines):
 
 
 def trim_console_mirror():
-    """Keep console_mirror.log bounded so it can never grow without limit."""
+    """Keep console_mirror.log bounded so it can never grow without limit. 1.9.4: cut back to the newest
+    _MIRROR_KEEP_BYTES at a line start, reading only that tail (never the whole file)."""
     try:
         if os.path.getsize(CONSOLE_MIRROR_FILE) <= _CONSOLE_MIRROR_MAX:
             return
-        with open(CONSOLE_MIRROR_FILE, "r", encoding="utf-8", errors="replace") as f:
-            tail = f.readlines()[-_MIRROR_KEEP:]
+        with open(CONSOLE_MIRROR_FILE, "rb") as f:
+            f.seek(-_MIRROR_KEEP_BYTES, 2)
+            data = f.read()
+        data = data[data.find(b"\n") + 1:]
         tmp = CONSOLE_MIRROR_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(tail)
+        with open(tmp, "wb") as f:
+            f.write(data)
         os.replace(tmp, CONSOLE_MIRROR_FILE)
     except OSError:
         pass
 
 
+def _keep_tail_with_day(data, keep):
+    """The newest `keep` bytes of a log, cut at a line start, with the [DAY] line in force at the cut copied to the
+    top so the kept part still says which day its first lines belong to. (Same as cc_web's.)"""
+    if len(data) <= keep:
+        return data
+    cut = data.find(b"\n", len(data) - keep) + 1
+    if cut <= 0:
+        return data
+    kept = data[cut:]
+    first = kept.split(b"\n", 1)[0]
+    if b"  " + _DAY_TAG.encode() in first:
+        return kept
+    i = data.rfind(b"  " + _DAY_TAG.encode(), 0, cut)
+    if i < 0:
+        return kept
+    ls = data.rfind(b"\n", 0, i) + 1
+    le = data.find(b"\n", i)
+    return data[ls:le + 1] + kept
+
+
 def trim_activity_log():
-    """Keep activity.log bounded (it was never trimmed and cc_web re-reads its tail every ~1s).
-    5000 lines ≈ weeks of history; the webcc only ever shows the last 80."""
+    """Keep activity.log bounded. 1.9.4 (owner: "extend the history of the console and activity log so it's a lot
+    longer"): past _ACTIVITY_MAX it is cut back to the newest _ACTIVITY_KEEP (~100,000 lines), keeping the [DAY]
+    line in force at the cut. The webcc pages it on scroll-up (cc_web /api/loghist)."""
     try:
-        if os.path.getsize(ACTIVITY_FILE) <= 1_500_000:
+        if os.path.getsize(ACTIVITY_FILE) <= _ACTIVITY_MAX:
             return
-        with open(ACTIVITY_FILE, "r", encoding="utf-8", errors="replace") as f:
-            tail = f.readlines()[-5000:]
+        with open(ACTIVITY_FILE, "rb") as f:
+            data = f.read()
         tmp = ACTIVITY_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.writelines(tail)
+        with open(tmp, "wb") as f:
+            f.write(_keep_tail_with_day(data, _ACTIVITY_KEEP))
         os.replace(tmp, ACTIVITY_FILE)
+    except OSError:
+        pass
+
+
+def _activity_backfill_days():
+    """1.9.4 one-off at bot start: if activity.log has no [DAY] lines yet, work the dates out backwards from the file's
+    last write (a clock time later than the line after it means midnight passed in between) and insert a [DAY] line
+    where each day starts. A whole day with no lines at all cannot be seen, so the oldest dates can be early; every
+    line written from now on gets its [DAY] line as it happens (activity())."""
+    import datetime as _dt
+    try:
+        with open(ACTIVITY_FILE, "rb") as f:
+            data = f.read()
+        mt = _dt.datetime.fromtimestamp(os.path.getmtime(ACTIVITY_FILE))
+    except OSError:
+        return
+    if not data.strip() or (b"  " + _DAY_TAG.encode()) in data:
+        return
+    lines = data.decode("utf-8", "replace").split("\n")
+
+    def secs(ln):
+        try:
+            h, m, s = int(ln[0:2]), int(ln[3:5]), int(ln[6:8])
+            ap = ln[9:11]
+            if ln[2] != ":" or ln[5] != ":" or ap not in ("AM", "PM") or not 1 <= h <= 12:
+                return None
+            return (h % 12 + (12 if ap == "PM" else 0)) * 3600 + m * 60 + s
+        except (ValueError, IndexError):
+            return None
+
+    dates = [None] * len(lines)
+    cur, nxt = mt.date(), None
+    for i in range(len(lines) - 1, -1, -1):
+        s = secs(lines[i])
+        if s is None:
+            continue
+        if nxt is None:
+            if s > mt.hour * 3600 + mt.minute * 60 + mt.second + 120:
+                cur -= _dt.timedelta(days=1)             # the newest line is later in the day than the last write
+        elif s > nxt + 3 * 3600:
+            cur -= _dt.timedelta(days=1)                 # going back past midnight
+        dates[i], nxt = cur, s
+    out, last = [], None
+    for i, ln in enumerate(lines):
+        d = dates[i]
+        if d is not None and d != last:
+            out.append(ln[:11] + "  " + _DAY_TAG.ljust(8) + _day_text(d))
+            last = d
+        out.append(ln)
+    try:
+        tmp = ACTIVITY_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write("\n".join(out))
+        os.replace(tmp, ACTIVITY_FILE)
+        print(f"[activity] backfilled {sum(1 for o in out if _DAY_TAG in o[:24])} [DAY] lines into activity.log")
     except OSError:
         pass
 
@@ -1061,6 +1189,7 @@ def write_dashboard_state(*, state, server_up, online, votes, vote_ends_at,
             vote = {
                 "context": vote_context,
                 "ends_in": max(0, int(vote_ends_at - now)),
+                "stage": VOTE_STAGE.get("stage", 0),
                 "options": [{"key": k, "label": _plain(v[3]), "votes": counts.get(k, 0)}
                             for k, v in sorted(VOTE_OPTIONS.items())],
             }
@@ -1104,6 +1233,7 @@ def write_dashboard_state(*, state, server_up, online, votes, vote_ends_at,
             "shared_ranks": shared_ranks_state(),                # cross-server shared-rank status + combined board for the webcc Shared Ranks card
             "reports": reports_state(),                          # anti-grief auto-kick/flag reports for the webcc Reports tab
             "ban_log": ban_log_state(),                          # persistent per-SteamID ban log (repeat-offender tracking) for the webcc Reports tab
+            "tk_watch": tk_watch_state(),                        # 1.9.4: teamkill watch list (3+ teamkill entries, both servers)
             "server_config": server_config_state(),              # DedicatedServerConfig.json fields for the webcc Server Settings tab
             "sys_messages": sysmsg_state(),                       # built-in automated-message overrides for the webcc Messages tab
             "help_config": help_state(),                          # !help command list (text + show/hide gates) for the webcc Help editor
@@ -1272,6 +1402,7 @@ class RemoteCommand:
         return self.send("set-next-mission", group, name, max_time)
 
     def set_time_remaining(self, seconds):
+        LAST_CUT_AT[0] = time.time()          # 1.8.5 audit: the countdown warning must not fire on a cut
         return self.send("set-time-remaining", seconds)
 
     def get_mission_time(self):
@@ -1692,7 +1823,9 @@ def set_mission_enabled(name, on):
 
 
 def mission_pool_state():
-    return [{"name": n, "label": friendly_label(n), "cat": c, "on": mission_enabled(n)}
+    # owner 2026-09-05: the panel label wears the same kind tag as the in-game ballot line
+    return [{"name": n, "label": friendly_label(n) + ballot_kind_suffix(n, coloured=False), "cat": c,
+             "on": mission_enabled(n)}
             for n, c in _all_pool_missions()]
 
 
@@ -1740,6 +1873,13 @@ _VOTEMAP_DEFAULTS = {
     "builtin_minutes":   180,        # match length (min) the bot assigns to BUILT-IN ops/scenarios — set this
                                      # to ~180 so a built-in isn't stuck on its 2h server default, leaving the
                                      # bot room to end a timed-out match and open the next-map vote.
+    "vote_style":        "one_round",  # one_round = the classic single ballot | two_round = pick the mission, then
+                                     # its variant (time of day / weather / place). "enabled" above turns voting off
+    "variants":          {},         # {mission: [variant missions]} set in the web panel's Missions window: round 1
+                                     # shows the mission once, round 2 offers it and its variants. A mission with
+                                     # no variants skips round 2
+    "family_minutes":    {},         # owner 2026-09-05: per-FAMILY match length by name prefix, e.g.
+                                     # {"OP Rising Tsunami Extended": 240}; wins over coop/builtin_minutes
     "boot_map":          "",         # FIX 4: mission NAME the server rotates to on (re)start / when a vote makes
                                      # no pick. "" = leave the next mission to the server's own rotation (default).
     # NB: the vote-TIMING knobs (MAP_VOTE_DURATION / POST_VOTE_MAP_CHANGE_DELAY) are deliberately NOT here —
@@ -1827,7 +1967,12 @@ def _votemap_cfg():
     # shows the SAME value the bot actually assigns -> the webcc timer field can never disagree with reality.
     cfg["coop_minutes"]      = _vm_int(cfg["coop_minutes"], 180, 10, 600)
     cfg["builtin_minutes"]   = _vm_int(cfg["builtin_minutes"], 180, 10, 600)
+    _fm = cfg.get("family_minutes")
+    cfg["family_minutes"]    = ({str(k).strip(): _vm_int(v, 180, 10, 600) for k, v in _fm.items() if str(k).strip()}
+                                if isinstance(_fm, dict) else {})
     cfg["boot_map"]          = cfg["boot_map"] if isinstance(cfg.get("boot_map"), str) else ""   # FIX 4
+    cfg["vote_style"] = "two_round" if cfg.get("vote_style") == "two_round" else "one_round"
+    cfg["variants"] = _vm_variants(cfg.get("variants"))
     if cfg["coop_mode"] not in ("balanced", "random", "weighted"):
         cfg["coop_mode"] = "balanced"
     if cfg["pvp_mode"] not in ("fixed", "random", "weighted", "family", "each"):
@@ -1865,6 +2010,28 @@ _VOTEMAP_INT_BOUNDS = {
 }
 _VOTEMAP_BOOL_KEYS = ("enabled", "include_pvp", "include_custom", "force_pvp_enabled", "no_repeat")
 _VOTEMAP_ALIASES   = {"ballot_size": "coop_count", "mode": "coop_mode"}
+
+
+def _vm_variants(v):
+    """Sanitise the variants setting: {mission: [variant missions]}, no blanks, no repeats, a mission is never its
+    own variant and a variant belongs to one mission only (the first one listing it)."""
+    out, claimed = {}, set()
+    if isinstance(v, dict):
+        for parent, kids in v.items():
+            parent = str(parent or "").strip()
+            if not parent or parent in claimed:
+                continue
+            if isinstance(kids, str):
+                kids = [kids]
+            keep = []
+            for k in (kids if isinstance(kids, (list, tuple)) else []):
+                k = str(k or "").strip()
+                if k and k != parent and k not in claimed and k not in keep and k not in out:
+                    keep.append(k)
+            if keep:
+                out[parent] = keep
+                claimed.update(keep)
+    return out
 
 
 def set_votemap_cfg(key, value):
@@ -1910,6 +2077,12 @@ def set_votemap_cfg(key, value):
             # missing the custom USER missions, so filtering now would PERMANENTLY drop those pins.
             # Keep unknown names; open_vote() re-validates per-ballot anyway.
             cfg[key] = _vm_strlist(value)
+    elif key == "vote_style":
+        if str(value) not in ("one_round", "two_round"):
+            return False
+        cfg[key] = str(value)
+    elif key == "variants":
+        cfg[key] = _vm_variants(value)
     elif key == "boot_map":
         # FIX 4: default/boot mission NAME. "" clears it. When the mission audit is loaded, only accept a
         # real votable map (reject unknown so a stale UI value can't silently persist); before the first
@@ -1933,6 +2106,11 @@ def set_votemap_cfg(key, value):
         return False
     global _vm_cfg_cache
     _vm_cfg_cache = None                    # drop the mtime cache so this save is read back immediately
+    if key in ("vote_style", "enabled"):
+        try:
+            sync_effective_pmd()            # two rounds need twice the vote time in the post-mission delay
+        except Exception as e:              # noqa: BLE001 - the setting is saved either way
+            print(f"[votemap] post-mission delay sync after {key}: {e}")
     return True
 
 
@@ -1942,7 +2120,15 @@ def mission_max_time(name):
     builtin_minutes / coop_minutes), so a built-in can be given the same ~3h the co-op maps get
     instead of running on the server's 2h default. Clamped 10min..10h; falls back to MISSION_MAX_TIME."""
     is_builtin = name in PVP_MISSIONS or name in BUILTIN_COOP_MISSIONS or name in MISSION_KEY_CANDIDATES
-    mins = _votemap_cfg().get("builtin_minutes" if is_builtin else "coop_minutes")
+    _cfg = _votemap_cfg()
+    mins = _cfg.get("builtin_minutes" if is_builtin else "coop_minutes")
+    # owner 2026-09-05: a per-FAMILY override by name prefix (votemap_config "family_minutes", e.g.
+    # {"OP Rising Tsunami Extended": 240}). Set in the PvE server's config only; the PvP server's
+    # config has no entry, so the same code changes nothing there.
+    for _pref, _m in (_cfg.get("family_minutes") or {}).items():
+        if _pref and str(name or "").startswith(_pref):
+            mins = _m
+            break
     try:
         return max(10, min(600, int(mins))) * 60
     except (TypeError, ValueError):
@@ -1968,7 +2154,7 @@ def _effective_pmd():
     """Derived DedicatedServerConfig PostMissionDelay = vote length + post-vote delay. This is the value
     the bot keeps the server's real PostMissionDelay synced to (sync_effective_pmd), so the raw delay can
     never be shorter than the vote (the exact breakage the owner hit: vote=60 but mission-delay=45)."""
-    return int(MAP_VOTE_DURATION) + int(POST_VOTE_MAP_CHANGE_DELAY)
+    return int(MAP_VOTE_DURATION) * (2 if _vote_two_stage() else 1) + int(POST_VOTE_MAP_CHANGE_DELAY)
 
 
 def votemap_cfg_state():
@@ -1997,6 +2183,11 @@ def votemap_cfg_state():
     # the full votable universe (for the "add guaranteed" picker) + friendly labels for the current pins
     votable = [{"name": n, "label": friendly_label(n), "cat": cat} for n, cat in _all_pool_missions()]
     votable += [{"name": n, "label": friendly_label(n), "cat": "Custom"} for n in _enabled_custom_names()]
+    # dedupe by name: a mission listed by both sources would appear twice (and double its draw weight). Keep the
+    # first occurrence.
+    _seen_v = set(); votable = [x for x in votable
+                  if not ((x.get("name") if isinstance(x, dict) else x) in _seen_v
+                          or _seen_v.add(x.get("name") if isinstance(x, dict) else x))]
     c["votable"] = votable
     c["guaranteed_labels"] = [{"name": n, "label": friendly_label(n),
                                "pvp": is_pvp(n), "on": mission_enabled(n)} for n in c["guaranteed"]]
@@ -2353,6 +2544,10 @@ def _shared_pub_worker():
             _SHARED_PUB_PENDING = False
             if pending:
                 publish_ranks_aggregate()
+            try:
+                _tkwatch_daemon_pass()        # 1.9.4 teamkill watch list (bot process only)
+            except Exception:                 # noqa: BLE001
+                pass
             publish_presence()                # cheap + on its OWN throttle: presence must stay fresh (~20s)
                                               # even when ranks are quiet, or the peer line goes stale/silent
             if SHARED_RANKS_ENABLED:          # #XSRV-2: keep the READ caches warm OFF the main loop so a
@@ -3080,6 +3275,111 @@ def remove_ban_log(sid):
 
 
 load_ban_log()
+
+
+# --- Teamkill watch list (1.9.4, owner 2026-10-04): "if a player has been logged 3 times in the moderation tab ... they
+# go on a list where it autokicks them instead of ejects and give them a warning after joining". Only teamkill entries
+# count ("only team kills"), both the punished ones and the ones flagged as not counted; other kinds of ban-log entry
+# (admin bans, dead-unit commands) do not. Counted across both servers: each bot publishes its own per-SteamID counts
+# into the shared Ranks folder (tkwatch_<id>.json, write-own-file like rankshare) and sums every server's file. The
+# daemon does the file work in the BOT process only; the main loop pushes the result to the plugin
+# (setcfg Teamkill.WatchList), because the bot's SFTP session belongs to the main loop. Removing a player's entries
+# in the Moderation ban log takes them off the list again.
+TK_WATCH_MIN = 3
+_TK_WATCH = []                 # [{"id", "name", "count"}] count >= TK_WATCH_MIN, for the webcc Moderation window
+_TK_WATCH_SIDS = [None]        # sorted tuple of those SteamIDs; None until the first pass
+_TK_WATCH_PUBLISHED = [None]   # the counts last written to our own tkwatch file
+_TK_WATCH_PUSH_AT = [0.0]
+
+
+def _is_tk_ban_entry(ent):
+    r = str((ent or {}).get("reason") or "")
+    return r.startswith("team-killed") or r.startswith("flagged: friendly kill")
+
+
+def _tk_counts_local():
+    out = {}
+    for sid, rec in list(_ban_log.items()):
+        if not isinstance(rec, dict):
+            continue
+        n = sum(1 for e in list(rec.get("entries") or []) if _is_tk_ban_entry(e))
+        if n:
+            out[str(sid)] = {"n": n, "name": str(rec.get("name") or "")}
+    return out
+
+
+def _tkwatch_daemon_pass():
+    """Publish this server's teamkill counts, sum every server's, keep _TK_WATCH/_TK_WATCH_SIDS current."""
+    global _TK_WATCH
+    if not _IS_BOT_PROCESS[0]:
+        return                                   # cc_web imports this module too; only the bot publishes
+    local = _tk_counts_local()
+    totals = {}
+
+    def add(counts, prefer_name):
+        for sid, v in (counts or {}).items():
+            try:
+                n = int((v or {}).get("n") or 0)
+            except (TypeError, ValueError):
+                continue
+            if n <= 0 or not str(sid).isdigit():
+                continue
+            t = totals.setdefault(str(sid), {"n": 0, "name": ""})
+            t["n"] += n
+            nm = str((v or {}).get("name") or "")
+            if nm and (prefer_name or not t["name"]):
+                t["name"] = nm
+
+    share = SHARED_RANKS_DIR if (SHARED_RANKS_ENABLED and SHARED_RANKS_DIR and SERVER_INSTANCE_ID) else ""
+    if share and os.path.isdir(share):
+        own = os.path.join(share, f"tkwatch_{SERVER_INSTANCE_ID}.json")
+        if local != _TK_WATCH_PUBLISHED[0] or not os.path.exists(own):
+            try:
+                tmp = own + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"updated": time.time(), "counts": local}, f)
+                os.replace(tmp, own)
+                _TK_WATCH_PUBLISHED[0] = local
+            except OSError:
+                pass
+        for fn in os.listdir(share):
+            if not (fn.startswith("tkwatch_") and fn.endswith(".json")) or fn == os.path.basename(own):
+                continue
+            try:
+                with open(os.path.join(share, fn), encoding="utf-8") as f:
+                    add((json.load(f) or {}).get("counts"), False)
+            except (OSError, ValueError, AttributeError):
+                continue
+    add(local, True)
+    rows = [{"id": sid, "name": t["name"] or sid, "count": t["n"]} for sid, t in totals.items() if t["n"] >= TK_WATCH_MIN]
+    rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
+    _TK_WATCH = rows
+    _TK_WATCH_SIDS[0] = tuple(sorted(r["id"] for r in rows))
+
+
+def tk_watch_state():
+    """For the webcc Moderation window: who is on the watch list and with how many teamkill entries."""
+    return [dict(r) for r in _TK_WATCH]
+
+
+def tk_watch_push(now):
+    """Main loop: keep the plugin's Teamkill.WatchList equal to the fleet-wide list. Reads the plugin's own reported
+    value (PLUGIN_CFG, refreshed by its dumpcfg after every setcfg), so it re-sends after a plugin update or a lost
+    command and stays quiet once they match. A plugin older than 1.9.4 does not report the key: nothing is sent."""
+    want = _TK_WATCH_SIDS[0]
+    if want is None or "Teamkill.WatchList" not in PLUGIN_CFG:
+        return
+    have = tuple(sorted(s.strip() for s in str(PLUGIN_CFG.get("Teamkill.WatchList") or "").replace(";", ",").split(",")
+                        if s.strip()))
+    if have == want or now - _TK_WATCH_PUSH_AT[0] < 60.0:
+        return
+    _TK_WATCH_PUSH_AT[0] = now
+    try:
+        _drop_plugin_cmd("setcfg|Teamkill.WatchList|" + ",".join(want))
+        names = ", ".join(r["name"] for r in _TK_WATCH) or "nobody"
+        activity(f"Teamkill watch list sent to the plugin: {names}", "CFG")
+    except Exception as e:                       # noqa: BLE001 - retried on the next minute
+        print(f"[tkwatch] push failed: {e}")
 
 
 def add_report(rec):
@@ -3815,7 +4115,7 @@ def _coop_cat(name):
     return "Custom"
 
 
-def build_coop(prev_set, target, cfg, exclude):
+def build_coop(prev_set, target, cfg, exclude, online_count=None):
     """Return (names, chosen_set) for the random CO-OP/custom portion: `target` maps from _votemap_pool()
     minus `exclude` (guaranteed maps already placed + recently-played maps), honouring coop_mode:
         balanced -> even round-robin across categories (Escalation / Terminal Control / Custom)
@@ -3823,6 +4123,8 @@ def build_coop(prev_set, target, cfg, exclude):
         weighted -> pick a category per slot by coop_weights, then a random map from it
     Keeps at most MAX_DARK_PER_VOTE 'dark' maps and avoids the exact previous set when possible. Returns
     ([], frozenset()) when there's nothing to pick. open_vote() assembles the full ordered ballot."""
+    if target <= 0:
+        return [], frozenset()
     mode = cfg["coop_mode"]
     weights = cfg["coop_weights"]
     mw = cfg.get("mission_weights") or {}            # per-MAP appearance chance (1.0 when absent)
@@ -3968,7 +4270,7 @@ def _pick_pvp(n, cfg, exclude=()):
 
 def open_vote(online_count=0):
     """Build a fresh ballot into VOTE_OPTIONS. Layout: [guaranteed co-op][random co-op][guaranteed PvP]
-    [random PvP], numbered 1..N. coop_count + pvp_count size the two pools independently (default 4 + 2 =
+    [random PvP], then shuffled and numbered 1..N (owner 2026-09-29: no fixed !1). coop_count + pvp_count size the two pools independently (default 4 + 2 =
     the regular 6). Guaranteed missions are always pinned and count toward their type's slot count (a
     generalisation of the always-on PvP pair). A high-population rule can override the split into a
     PvP-heavy ballot; avoid_recent keeps the last N winners off the random co-op fill."""
@@ -4047,7 +4349,8 @@ def open_vote(online_count=0):
                      f"enabled to offer instead", "MAP")
 
     coop_fill = max(0, coop_n - len(g_coop))
-    coop_names, _prev_ballot_set = build_coop(_prev_ballot_set, coop_fill, cfg, set(g_coop) | avoid)
+    coop_names, _prev_ballot_set = build_coop(_prev_ballot_set, coop_fill, cfg, set(g_coop) | avoid,
+                                           online_count=online_count)
     # Exclude everything the co-op half already placed. The variants are CUSTOM missions, so with
     # include_custom on they are candidates for the co-op fill AND members of a PvP family - without
     # this the same mission could take two slots on one ballot and split the vote between them.
@@ -4097,8 +4400,121 @@ def open_vote(online_count=0):
                 VOTE_OPTIONS = {}
                 return VOTE_OPTIONS
             ordered = random.sample(coop_pool, min(4, len(coop_pool)))
+    # Owner 2026-09-29: "can we make the order random? so it's not always escalation as !1". The picks above are
+    # unchanged; only the !1..!N numbering is shuffled, here, so every path above gets it.
+    random.shuffle(ordered)
     VOTE_OPTIONS = {str(i): _ballot_entry(n) for i, n in enumerate(ordered, start=1)}
     return VOTE_OPTIONS
+
+
+# ── TWO-ROUND MAP VOTE (1.9.0) ─────────────────────────────────────────────────────────────────────────────
+# Map voting is one of three settings: two rounds, one round (the classic ballot) or off (votemap_config
+# "vote_style" + "enabled"). In two rounds, open_vote() builds the ballot exactly as before and vote_stage1() folds
+# it to ONE option per mission, each variant folded into the mission it belongs to (the "variants" setting, set in
+# the web panel's Missions window). When that vote closes, vote_stage2() puts the winner and its variants to a
+# second vote. A mission with no variants goes straight through.
+
+
+def _vote_two_stage():
+    """True when the operator picked two rounds (and map voting is on)."""
+    try:
+        cfg = _votemap_cfg()
+        return bool(cfg.get("enabled")) and cfg.get("vote_style") == "two_round"
+    except Exception:                                  # noqa: BLE001 - a bad config file means one round
+        return False
+
+
+def _v2_key(name):
+    """What round 1 votes on: the mission a variant belongs to, else the mission itself."""
+    s = str(name or "")
+    for parent, kids in (_votemap_cfg().get("variants") or {}).items():
+        if s == parent or s in kids:
+            return parent
+    return s
+
+
+def _v2_title(name):
+    """The round-1 label of the mission `name` belongs to."""
+    key = _v2_key(name)
+    return _PVP_LABEL.get(key) or friendly_label(key)
+
+
+def _v2_short(name, parent):
+    """The round-2 label: "Original" for the mission itself, "Night" for "Escalation - Night" under "Escalation",
+    else the variant's own label."""
+    if name == parent:
+        return "Original"
+    lab, plab = friendly_label(name), friendly_label(parent)
+    if lab.startswith(plab + " - "):
+        return lab[len(plab) + 3:]
+    return lab
+
+
+def _v2_variants(rep, online_count=0):
+    """Round-2 options for the mission `rep` won with: the mission and every enabled, votable variant of it."""
+    cfg = _votemap_cfg()
+    parent = _v2_key(rep)
+    mw = cfg.get("mission_weights") or {}
+    votable = _votable_names()
+    names = []
+    for n in [parent] + list((cfg.get("variants") or {}).get(parent) or []):
+        if n in names or n not in votable or not mission_enabled(n) or mw.get(n, 1.0) == 0:
+            continue
+        names.append(n)
+    if rep not in names:
+        names.append(rep)                              # it was on the ballot, so it is always allowed
+    return names
+
+
+def vote_stage1():
+    """Fold the ballot open_vote() just built into one option per mission. Returns the option count."""
+    global VOTE_OPTIONS
+    VOTE_SHORT.clear()
+    VOTE_STAGE.update(stage=0, title="", what="", opened=time.time())
+    if not (_vote_two_stage() and VOTE_OPTIONS):
+        return len(VOTE_OPTIONS)
+    seen, out = set(), []
+    for k in sorted(VOTE_OPTIONS, key=lambda x: int(x)):
+        g, n, mt, lab = VOTE_OPTIONS[k]
+        key = _v2_key(n)
+        if key in seen:
+            continue
+        seen.add(key)
+        if key != n:                                   # a variant drew the slot: show the mission it belongs to
+            lab = _ballot_entry(key)[3]
+        out.append((g, n, mt, lab))
+    VOTE_OPTIONS = {str(i): e for i, e in enumerate(out, start=1)}
+    VOTE_STAGE["stage"] = 1
+    return len(VOTE_OPTIONS)
+
+
+def vote_stage2(rc, votes, first_vote_at, prior, online_count, source=None):
+    """Close the mission vote and put the winner and its variants into VOTE_OPTIONS. Returns how many there are:
+    2+ means a second ballot to announce; 1 means apply it straight away."""
+    global VOTE_OPTIONS
+    if votes:
+        tally = Counter(votes.values())
+        top = max(tally.values())
+        tied = [k for k, c in tally.items() if c == top]
+        wk = tied[0] if len(tied) == 1 else min(tied, key=lambda k: first_vote_at.get(k, float("inf")))
+        src = "vote" if len(tied) == 1 else "vote (tie -> first voted)"
+    else:
+        wk = random.choice(list(VOTE_OPTIONS))
+        src = "random (no votes)"
+    src = source or src
+    _g, rep, _mt, label = VOTE_OPTIONS[wk]
+    summary = ", ".join(f"{VOTE_OPTIONS[k][3]}:{c}" for k, c in Counter(votes.values()).most_common()) or "-"
+    parent = _v2_key(rep)
+    names = _v2_variants(rep, online_count)
+    random.shuffle(names)                              # no fixed !1
+    VOTE_OPTIONS = {str(i): _ballot_entry(n) for i, n in enumerate(names, start=1)}
+    VOTE_SHORT.clear()
+    VOTE_SHORT.update({str(i): _v2_short(n, parent) for i, n in enumerate(names, start=1)})
+    VOTE_STAGE.update(stage=2, title=_v2_title(parent) + ballot_kind_suffix(parent), what="VARIANT")
+    tally_bit = f" Tally: {summary}" if votes else ""
+    rc.say(f"<color=#55FF55>Mission: {label}</color> ({src}).{tally_bit}")
+    activity(f"Mission vote: {_plain(label)}   ({src}; votes: {_plain(summary)})", "MAP")
+    return len(VOTE_OPTIONS)
 
 
 def recompute_approval(current_online, frozen_threshold, frozen_players):
@@ -4118,19 +4534,29 @@ def announce_options(rc, duration=None, left_note=None):
     keys = list(VOTE_OPTIONS.keys())
     n = len(keys)
     time_bit = left_note if left_note else f"{duration}s"
-    rc.say(f"<color=#FFFF00>=== NEXT MAP VOTE ===</color> "
-           f"type <color=#55FF55>!1</color>-<color=#55FF55>!{n}</color> in chat ({time_bit})")
+    _st = VOTE_STAGE.get("stage") or 0
+    if _st == 1:
+        _head = "<color=#FFFF00>=== NEXT MAP VOTE (1/2): MISSION ===</color> "
+    elif _st == 2:
+        _head = (f"<color=#FFFF00>=== NEXT MAP VOTE (2/2): {VOTE_STAGE.get('what') or 'VARIANT'} ===</color> "
+                 f"{VOTE_STAGE.get('title') or ''}, ")
+    else:
+        _head = "<color=#FFFF00>=== NEXT MAP VOTE ===</color> "
+    rc.say(_head + f"type <color=#55FF55>!1</color>-<color=#55FF55>!{n}</color> in chat ({time_bit})")
+
+    def _lab(k):
+        return VOTE_SHORT.get(k) or VOTE_OPTIONS[k][3]
     for i in range(0, n, 2):
         k1 = keys[i]
-        left = f"<color=#55FF55>!{k1}</color> = {VOTE_OPTIONS[k1][3]}"
+        left = f"<color=#55FF55>!{k1}</color> = {_lab(k1)}"
         if i + 1 < n:
             k2 = keys[i + 1]
-            right = f"<color=#55FF55>!{k2}</color> = {VOTE_OPTIONS[k2][3]}"
+            right = f"<color=#55FF55>!{k2}</color> = {_lab(k2)}"
             rc.say(f"  {left}  |  {right}")
-            activity(f"!{k1} = {_plain(VOTE_OPTIONS[k1][3])}  |  !{k2} = {_plain(VOTE_OPTIONS[k2][3])}", "VOTE")
+            activity(f"!{k1} = {_plain(_lab(k1))}  |  !{k2} = {_plain(_lab(k2))}", "VOTE")
         else:
             rc.say(f"  {left}")
-            activity(f"!{k1} = {_plain(VOTE_OPTIONS[k1][3])}", "VOTE")
+            activity(f"!{k1} = {_plain(_lab(k1))}", "VOTE")
 
 
 # ── Empty-server forced-cut fallback ────────────────────────────────────────────
@@ -4141,6 +4567,37 @@ def announce_options(rc, duration=None, left_note=None):
 # Record such cuts here; the main-loop roster poll re-fires set-time-remaining on
 # the next join (clock resumed), so the queued map loads ~ROLLOVER_SECONDS later.
 EMPTY_FORCED_CUT = {"pending": False, "label": "", "at": 0.0}
+LAST_CUT_AT = [0.0]            # 1.8.5 audit: wall time of the last set-time-remaining (the countdown warning skips a cut)
+DRAW_CUT = {"pending": False, "at": 0.0, "tries": 0, "next": 0.0}   # a draw cut the relay refused - retried from the main loop
+DRAW_CUT_MAX_AGE = 300         # s: stop re-sending a refused draw cut after this long (the mission ends on its own clock)
+
+
+def draw_cut_send(rc):
+    """One set-time-remaining for a draw, judged by the relay's CODE (2000 = accepted). send() never raises
+    and returns None on a relay outage, so the code is the only truthful signal (1.8.5 audit)."""
+    LAST_CUT_AT[0] = time.time()
+    code, _resp = rc.send("set-time-remaining", ROLLOVER_SECONDS, return_code=True)
+    return code == 2000
+
+
+def service_draw_cut(rc, now):
+    """Main-loop retry for a draw cut the relay refused: re-send every 10 s until it is accepted, the mission
+    ends on its own (the MISSION_END line clears the flag), or DRAW_CUT_MAX_AGE passes."""
+    if not DRAW_CUT["pending"] or now < DRAW_CUT["next"]:
+        return
+    if now - DRAW_CUT["at"] > DRAW_CUT_MAX_AGE:
+        DRAW_CUT["pending"] = False
+        activity("Draw: gave up re-sending the cut - the map vote opens when the mission ends", "!")
+        return
+    DRAW_CUT["tries"] += 1
+    DRAW_CUT["next"] = now + 10
+    try:
+        if draw_cut_send(rc):
+            DRAW_CUT["pending"] = False
+            note_forced_cut(rc, "the next map")
+            activity("Draw: the cut was accepted on retry %d - cutting the mission over" % DRAW_CUT["tries"], "MATCH")
+    except Exception as e:                        # noqa: BLE001 - never break the main loop
+        print(f"[draw] retry {DRAW_CUT['tries']} failed: {e}")
 EMPTY_CUT_MAX_AGE = 3600.0        # give up on a queued empty-cut this long after it was armed
 
 
@@ -4195,7 +4652,7 @@ def apply_winner(rc, votes, first_vote_at, force_switch=False):
                 activity("Ending the match anyway - the server rotation picks what loads next", "MAP")
             return None
         winner_key = random.choice(list(VOTE_OPTIONS))
-        source = "random (no votes)"
+        source = "random (no votes)" if len(VOTE_OPTIONS) > 1 else "the only one available"
     group, name, max_time, label = VOTE_OPTIONS[winner_key]
     rc.set_next_mission(group, name, max_time)
     note_mission_played(name)                # feed avoid_recent + the no-repeat rule (rolling window)
@@ -4216,6 +4673,8 @@ def apply_winner(rc, votes, first_vote_at, force_switch=False):
     print(f"[vote] winner={label} via {source} tally={dict(Counter(votes.values()))}")
     if votes:
         activity(f"Next map: {_plain(label)}   (votes: {_plain(summary)})", "MAP")
+    elif len(VOTE_OPTIONS) == 1:
+        activity(f"Next map: {_plain(label)}   (the only one available)", "MAP")
     else:
         activity(f"No votes cast - picked {_plain(label)} at random", "MAP")
     return {
@@ -4388,16 +4847,17 @@ def force_change_map(rc, name):
             return False
         group, wire = key
     else:
-        group, wire = mission_group(name), name
-    rc.set_next_mission(group, wire, mission_max_time(name))  # queue it (configured per-type length)
+        wire = name
+        group = mission_group(wire)
+    rc.set_next_mission(group, wire, mission_max_time(wire))  # queue it (configured per-type length)
     CURRENT_MISSION = friendly_label(wire)                   # keep the warn-dedupe key stable
     note_mission_played(wire)                                # an admin map change IS the map that just played -
                                                              # without this the next ballot's no-repeat rule looks
                                                              # at the previous VOTE winner instead
     rc.set_time_remaining(ROLLOVER_SECONDS)                  # force the cut now (same as a !votemap force-switch)
-    note_forced_cut(rc, mission_display(name, coloured=False))  # empty server = paused clock -> re-fire on next join
-    rc.say(f"<color=#55FF55>Admin changed the map -> {mission_display(name)}</color>")
-    activity(f"ADMIN changed map -> {mission_display(name, coloured=False)}", "MAP")
+    note_forced_cut(rc, mission_display(wire, coloured=False))  # empty server = paused clock -> re-fire on next join
+    rc.say(f"<color=#55FF55>Admin changed the map -> {mission_display(wire)}</color>")
+    activity(f"ADMIN changed map -> {mission_display(wire, coloured=False)}", "MAP")
     print(f"[admin] force-change map -> {group}/{wire}")
     return True
 
@@ -4898,12 +5358,15 @@ def combined_rankup(steamid, new_local_pts, delta):
 
 
 _ID_SENTINEL_RE = re.compile(r"^ID:\s*\d{17}$")
+# The plugin renders "Pilot 0927" for an account whose Steam persona is its own ID (nothing can
+# resolve those). It must never be STORED - it would mask a real name exactly as the sentinel did.
+_PLACEHOLDER_NAME_RE = re.compile(r"^Pilot \d{4}$")
 def _storable_name(sid, name):
     """Name safe to store, or None. Never store the plugin's 'ID: <steam64>' placeholder (emitted
     while the server's Steam hasn't resolved a persona) - storing it would poison the bot->plugin
     name-fallback loop and mask the real name forever."""
     n = str(name or "").strip()
-    if not n or n == str(sid) or _ID_SENTINEL_RE.match(n):
+    if not n or n == str(sid) or _ID_SENTINEL_RE.match(n) or _PLACEHOLDER_NAME_RE.match(n):
         return None
     # ...and never store OUR OWN stand-in either. display_name() returns WELCOME_FALLBACK_NAME
     # ("Pilot") when nothing resolves, and that string passed every test above, so it got written to
@@ -5114,6 +5577,8 @@ def pump_persona_results():
             rec["name"] = good
         PLAYER_NAMES[sid] = good
         applied = True
+        if sid in _PENDING_JOINS:                  # its join line was held for this name
+            pump_join_lines()
         activity(f"Steam lookup named a placeholder player: {good}", "NAME")
         print(f"[persona] ...{sid[-4:]} -> {good}")
     if applied:
@@ -5573,26 +6038,58 @@ def recent_ledger_for(sid, n=4):
     return rows[-n:]
 
 
-JOIN_LOGGED = set()          # sids whose [JOIN] feed line has been written this session
+JOIN_LOGGED = set()          # sids whose [JOIN] feed line has been written (or is held) this session
+# A first-time player is usually not nameable at the first roster sighting: the Steam lookup lands about a second
+# later, so writing the line at once logged "Pilot joined (OFFCDT, 0 pts)" (owner 2026-10-05). Held like the
+# rank-funds lines: written when the name resolves, at FUNDS_NAME_GRACE at the latest, or when the player leaves.
+_PENDING_JOINS = {}          # sid -> {"at": monotonic, "online": roster count at the join}
+
+
+def _known_name(sid):
+    return (_storable_name(sid, PLAYER_NAMES.get(sid))
+            or _storable_name(sid, (RANK_DATA.get(sid) or {}).get("name")))
+
+
+def _write_join_line(sid, online):
+    nm = display_name(sid)                           # real name if known, neutral stand-in otherwise
+    # Same split as the welcome line the player is about to receive: tier from the CYCLE, number
+    # shown is the lifetime fleet TOTAL. Kept in step deliberately - reading "joined (AVM, 26755)"
+    # in the feed while the pilot was greeted with 127153 makes the monitor look wrong.
+    label, _color, _tail = rank_progress(cycle_points(sid), prestige_count(sid))
+    _who = f"{label}, {_pts(player_points(sid))}" if label else _pts(player_points(sid))
+    activity(f"{nm} joined   ({_who})   -  {online} online", "JOIN")
 
 
 def log_join_line(sid):
     """Record a join in the activity feed the moment the roster shows them, whatever the
-    in-game welcome does. Never raises."""
+    in-game welcome does - or, while their name is still unknown, hold it (pump_join_lines). Never raises."""
     try:
         sid = str(sid or "")
         if not sid or sid in JOIN_LOGGED:
             return
         JOIN_LOGGED.add(sid)
-        nm = display_name(sid)                       # real name if known, neutral stand-in otherwise
-        # Same split as the welcome line the player is about to receive: tier from the CYCLE, number
-        # shown is the lifetime fleet TOTAL. Kept in step deliberately - reading "joined (AVM, 26755)"
-        # in the feed while the pilot was greeted with 127153 makes the monitor look wrong.
-        label, _color, _tail = rank_progress(cycle_points(sid), prestige_count(sid))
-        _who = f"{label}, {_pts(player_points(sid))}" if label else _pts(player_points(sid))
-        activity(f"{nm} joined   ({_who})   -  {len(ROSTER_BY_SID)} online", "JOIN")
+        if not _known_name(sid):
+            display_name(sid)                        # starts the Steam lookup
+            _PENDING_JOINS[sid] = {"at": time.monotonic(), "online": len(ROSTER_BY_SID)}
+            return
+        _write_join_line(sid, len(ROSTER_BY_SID))
     except Exception as e:                           # noqa: BLE001
         print(f"[join] feed line failed: {e}")
+
+
+def pump_join_lines(now_leaving=None):
+    """Write held join lines whose name has resolved or whose grace has expired; now_leaving = a sid that is
+    leaving this poll (its join is written first, so LEFT never comes without JOIN). Never raises."""
+    if not _PENDING_JOINS:
+        return
+    now = time.monotonic()
+    for sid, item in list(_PENDING_JOINS.items()):
+        if sid == now_leaving or _known_name(sid) or (now - item["at"]) >= FUNDS_NAME_GRACE:
+            _PENDING_JOINS.pop(sid, None)
+            try:
+                _write_join_line(sid, item["online"])
+            except Exception as e:                   # noqa: BLE001
+                print(f"[join] held feed line failed: {e}")
 
 
 def queue_welcome(sid, name, delay=None):
@@ -5905,7 +6402,8 @@ def handle_stats_line(rc, obj):
             # flagged 'not counted' entry — never a warn/kick/ban.
             reason = f"flagged: friendly kill on {victim} — not counted"
         else:
-            reason = f"team-killed {victim} ({ordn} offense)"
+            reason = (f"team-killed {victim} (watch list kick)" if obj.get("watch")
+                      else f"team-killed {victim} ({ordn} offense)")
         # victim + weapon + nc are stored as their OWN fields (not just baked into `reason`) so the webcc
         # Moderation detail view can show the full breakdown — who was killed, how, with what, and (if not
         # counted) WHY it wasn't punished. ts: the plugin back-dates it to the OFFENCE moment (the collateral
@@ -5936,7 +6434,8 @@ def handle_stats_line(rc, obj):
             verb = {"warn": "warned + ejected", "kick": "kicked", "ban": "BANNED"}[action]
             cause = describe_tk_cause(rec)
             activity(f"TEAMKILL - {nm} {verb}: team-killed {victim}"
-                     + (f" - {cause}" if cause else "") + f" ({ordn} offense)", "!")
+                     + (f" - {cause}" if cause else "")
+                     + (" (watch list: first teamkill this match)" if obj.get("watch") else f" ({ordn} offense)"), "!")
             # KickPlayer session-blocks rejoin until unkick-player. TK 2nd offense is a kick with
             # rank-0-on-rejoin — they must be able to rejoin. Ban keeps the session block + plugin_bans.
             if action == "kick" and rid and re.fullmatch(r"\d{6,20}", rid):
@@ -6026,6 +6525,12 @@ def handle_stats_line(rc, obj):
         AIR = {"s": obj.get("s", []), "ai": obj.get("ai", 0), "pl": obj.get("pl", 0),
                "teamcap": obj.get("teamcap"), "totcap": obj.get("totcap")}
         AIR_TS = time.time()
+        return
+    if t == "perf":
+        # 1.9.5: the plugin's per-minute timing summary -> the per-minute performance log
+        global PERF, PERF_TS
+        PERF = {k: v for k, v in obj.items() if k != "t"}
+        PERF_TS = time.time()
         return
     if t == "net":
         # connection-health / RTT-probe telemetry (Connection Stress panel); payload shape is plugin-defined.
@@ -6198,8 +6703,26 @@ def handle_stats_line(rc, obj):
         handle_plugin_win(rc, obj.get("f") or "")
         return
     if t == "draw":
-        # Plugin ForceDraw fallback (no Defeat crown): announce-only / rotation handles end.
-        activity("Match ended in a DRAW (plugin)", "MATCH")
+        # The game's EndType is Victory|Defeat only - there is no Draw - so ForceDraw cannot declare the
+        # match over and the mission would run on (respawns on, scoring off) until its own clock expired:
+        # hours (owner 2026-09-05). The bot's next-map trigger is the GAME's
+        # mission-end line, which never comes. So cut the mission clock: the game ends the mission itself a
+        # few seconds later and prints that line, and match_finalize -> awards -> map vote all run through
+        # the ORDINARY end-of-match path, exactly as after a win. No false Victory is crowned.
+        try:
+            if draw_cut_send(rc):
+                activity("Match ended in a DRAW - cutting the mission over so the next map vote opens", "MATCH")
+                note_forced_cut(rc, "the next map")   # empty server: the clock is paused, re-fire on the next join
+                print(f"[draw] no Draw EndType - cut the mission to {ROLLOVER_SECONDS}s so the normal end path runs")
+            else:
+                # 1.8.5 audit: send() swallows relay errors and returns None - the old except never fired and the
+                # draw sat unrotated behind a false "cutting" line. Arm the main-loop retry instead.
+                DRAW_CUT.update(pending=True, at=time.time(), tries=1, next=time.time() + 10)
+                activity("Match ended in a DRAW - the relay refused the cut, retrying for up to 5 minutes", "!")
+                print("[draw] set-time-remaining refused - retry armed")
+        except Exception as e:                    # noqa: BLE001 - a draw must never break the frame loop
+            activity("Draw: could not cut the mission short - the map vote opens when the mission ends", "!")
+            print(f"[draw] set-time-remaining failed: {e}")
         return
     if t == "award":
         if not USE_PLUGIN_SCORE:
@@ -6350,7 +6873,34 @@ _EOM_FACTION_MAX_AGE = 120.0
 # flush ever coming. _eom_win_timeout() says the line bare once this expires, and the flush skips it
 # if it beat the timer. Either way it is said exactly once.
 _EOM_WIN_HOLD_S = 6.0
-_EOM_WIN_PENDING = {"faction": "", "at": 0.0}
+_EOM_WIN_PENDING = {"faction": "", "at": 0.0, "human": ""}
+_FACTION_TAG = {"boscali": "BDF", "primeva": "PALA"}
+
+
+def _pve_human_side():
+    """PvE (owner 2026-10-08): the side the humans flew in the match that is ending, so the result line says whether
+    THEY won or lost. None on a PvP map. From the players seen in the last 5 minutes, else BDF/PALA in the name."""
+    mission = str(((CUR_MATCH or {}).get("mission")) or CURRENT_MISSION or "")
+    if not mission or is_pvp(mission):
+        return None
+    now = time.time()
+    counts = {}
+    for meta in list(STATS_META.values()):
+        f = (meta.get("faction") or "").strip()
+        try:
+            fresh = now - float(meta.get("t") or 0) < 300
+        except (TypeError, ValueError):
+            fresh = False
+        if f and fresh:
+            counts[f] = counts.get(f, 0) + 1
+    if counts:
+        return max(counts, key=counts.get)
+    low = mission.lower()
+    if "pala" in low:
+        return "Primeva"
+    if "bdf" in low:
+        return "Boscali"
+    return None
 
 
 def _clear_eom_award_buf():
@@ -6367,9 +6917,19 @@ def _say_victory(rc, faction, win_pts=0):
     """The single match-end victory line. `win_pts` folds the team bonus in when it is known, so the
     award burst does not need a second line to state it. Owner can hide the whole thing (webcc
     Messages tab -> 'victory'); the POINTS are granted by the plugin either way."""
+    human = _EOM_WIN_PENDING.get("human") or ""
     _EOM_WIN_PENDING["faction"] = ""
     _EOM_WIN_PENDING["at"] = 0.0
+    _EOM_WIN_PENDING["human"] = ""
     if not (USE_PLUGIN_SCORE and sysmsg_on("victory")):
+        return
+    if human:                                   # PvE: say whether the HUMAN side won or lost
+        side = _FACTION_TAG.get(human.lower(), human)
+        if faction.lower() == human.lower():
+            tail = (f"<color=#FFFFFF>, +{_pts(win_pts)} to every {side} pilot</color>") if win_pts else "!"
+            rc.say(f"<color=#36FFD0>VICTORY!</color> {side} won the mission{tail}")
+        else:
+            rc.say(f"<color=#FF5555>DEFEAT!</color> {side} lost the mission")
         return
     tail = (f" <color=#FFFFFF>- +{_pts(win_pts)} to every {faction} pilot</color>") if win_pts else "!"
     rc.say(f"<color=#36FFD0>VICTORY!</color> {faction} wins the mission{tail}")
@@ -6465,7 +7025,18 @@ def handle_plugin_win(rc, faction):
     _clear_eom_award_buf()  # fresh match-end award burst follows this win frame
     _EOM_AWARD_BUF["faction"] = faction       # the team line names the side, never the players
     _EOM_AWARD_BUF["faction_ts"] = time.time()   # stamped so it can't be reused by a later match
-    activity(f"VICTORY! {faction} wins the mission", "WIN")
+    human = _pve_human_side() or ""
+    if human:
+        side = _FACTION_TAG.get(human.lower(), human)
+        activity(f"{'VICTORY' if faction.lower() == human.lower() else 'DEFEAT'} - {side} {'won' if faction.lower() == human.lower() else 'lost'} the mission ({faction} won)", "WIN")
+    else:
+        activity(f"VICTORY! {faction} wins the mission", "WIN")
+    # HELD, not said (2026-08-17): the award burst is ~1s behind this frame and carries the team
+    # bonus, so waiting lets one line state both instead of two lines stating the winner twice.
+    # flush_eom_award_announce says it; _eom_win_timeout is the backstop if no burst ever comes.
+    _EOM_WIN_PENDING["faction"] = faction
+    _EOM_WIN_PENDING["at"] = time.time()
+    _EOM_WIN_PENDING["human"] = human
     # HELD, not said (2026-08-17): the award burst is ~1s behind this frame and carries the team
     # bonus, so waiting lets one line state both instead of two lines stating the winner twice.
     # flush_eom_award_announce says it; _eom_win_timeout is the backstop if no burst ever comes.
@@ -6558,6 +7129,26 @@ def _rank_line_name(sid, rec=None):
         return ""
 
 
+# 1.9.5 (owner 2026-10-06): plugin_ranks.txt / plugin_skill.txt are pushed only when their content changed. The rank
+# file carries rank tags, tiers and names, not points, so it rarely changes; re-pushing the same 270 KB every 2 min made
+# the plugin reload it each time (~9 ms in one frame, measured with Perf.Timing). Same content is still re-pushed every
+# 30 min in case the copy on the host was lost.
+_LAST_PUSH = {}            # file name -> (sha1 of the body last pushed OK, when)
+_PUSH_REFRESH_S = 1800
+
+
+def _push_unchanged(name, body):
+    import hashlib
+    last = _LAST_PUSH.get(name)
+    return (last is not None and last[0] == hashlib.sha1(body).hexdigest()
+            and time.time() - last[1] < _PUSH_REFRESH_S)
+
+
+def _push_done(name, body):
+    import hashlib
+    _LAST_PUSH[name] = (hashlib.sha1(body).hexdigest(), time.time())
+
+
 def push_plugin_ranks():
     """Write sid|rank-label|#colour lines to plugin_ranks.txt on the container so the
     NukeStats plugin can render [ABBR] / [ABBR - n*] chat tags via Prefixed (custom chat).
@@ -6606,6 +7197,8 @@ def push_plugin_ranks():
         except Exception as e:                                 # noqa: BLE001 - a display push must never raise
             print(f"[plugin-ranks] peer merge skipped: {e}")
     body = ("\n".join(lines) + "\n").encode("utf-8")
+    if _push_unchanged("plugin_ranks.txt", body):
+        return
 
     def _w(sftp):
         with sftp.open("plugin_ranks.txt.tmp", "wb") as f:
@@ -6620,8 +7213,58 @@ def push_plugin_ranks():
             sftp.rename("plugin_ranks.txt.tmp", "plugin_ranks.txt")
     try:
         _sftp_op(_w)
+        _push_done("plugin_ranks.txt", body)
     except Exception as e:                        # noqa: BLE001
         print(f"[plugin-ranks] push failed: {e}")
+
+
+# 1.9.5 (owner 2026-10-06): one line a minute in perf_log.csv. The panel CPU read runs on its own thread so the loop
+# never waits on the panel.
+PERF_LOG = os.path.join(_BASE_DIR, "perf_log.csv")
+_PERF_LOG_COLS = ["time", "online", "ai_aircraft", "player_aircraft", "frametime_ms", "cpu_pct", "mem_mb", "panel_state",
+                  "mission", "ft_avg", "ft_p95", "ft_max", "plugin_ms", "top_costs"]
+
+
+def _perf_log_row(online):
+    now = time.time()
+    air = AIR if (AIR and now - AIR_TS < 30) else {}
+    perf = PERF if (PERF and now - PERF_TS < 90) else {}
+    top = ""
+    if perf.get("ms"):
+        top = " ".join(f"{k}={v:.1f}" for k, v in sorted(perf["ms"].items(), key=lambda kv: -kv[1])[:6])
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "online": online,
+            "ai_aircraft": air.get("ai", ""), "player_aircraft": air.get("pl", ""),
+            "frametime_ms": LAST_FRAMETIME_MS if LAST_FRAMETIME_MS is not None else "",
+            "cpu_pct": "", "mem_mb": "", "panel_state": "", "mission": CURRENT_MISSION,
+            "ft_avg": perf.get("ft_ms", ""), "ft_p95": perf.get("ft_p95", ""), "ft_max": perf.get("ft_max", ""),
+            "plugin_ms": perf.get("plugin_total_ms", ""), "top_costs": top}
+
+
+def _perf_log_write(row):
+    try:
+        cfg = _pt_cfg()
+        if not cfg.get("err") and cfg.get("server"):
+            a = _pt_api(cfg, "GET", f"/api/client/servers/{cfg['server']}/resources", None).get("attributes", {})
+            u = a.get("resources", {})
+            row["cpu_pct"] = round(u.get("cpu_absolute", 0))
+            row["mem_mb"] = round(u.get("memory_bytes", 0) / 1048576)
+            row["panel_state"] = a.get("current_state") or ""
+    except Exception:                             # noqa: BLE001 - the log line goes out without the panel numbers
+        pass
+    try:
+        import csv
+        new = not os.path.exists(PERF_LOG)
+        with open(PERF_LOG, "a", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=_PERF_LOG_COLS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:                        # noqa: BLE001
+        print(f"[perf-log] write failed: {e}")
+
+
+def perf_log_tick(online):
+    threading.Thread(target=_perf_log_write, args=(_perf_log_row(online),), daemon=True).start()
 
 
 def refresh_current_mission(rc):
@@ -6676,6 +7319,9 @@ def check_mission_time_warnings(rc, mtime, mission_name):
         _warn_mission = mission_name
     if not mtime or mtime[1] <= 0:
         return
+    if time.time() - LAST_CUT_AT[0] < ROLLOVER_SECONDS + 5:   # 1.8.5 audit: a forced cut is not a countdown
+        _warnings_fired.update(t for t in WARN_THRESHOLDS if mtime[1] - mtime[0] <= t)
+        return
     remaining = mtime[1] - mtime[0]
     due = [t for t in WARN_THRESHOLDS if t not in _warnings_fired and remaining <= t]
     if not due:
@@ -6728,8 +7374,9 @@ def check_match_milestones(rc, mtime):
         if mark in _ms_stay_fired or elapsed < mark:
             continue
         _ms_stay_fired.add(mark)
-        if sysmsg_on("stay"):
-            rc.say(sysmsg_text("stay", _SYSMSG_STAY_DEFAULT))
+        if not sysmsg_on("stay"):                # owner 2026-10-08: switched off -> nothing posted, nothing logged
+            continue
+        rc.say(sysmsg_text("stay", _SYSMSG_STAY_DEFAULT))
         activity(f"Posted the 'stay for the next match' reminder ({mark // 60} min in)", "INFO")
         print(f"[stay] reminder fired at {mark // 60} min elapsed")
 
@@ -6796,8 +7443,13 @@ def check_schedule(rc):
         rc.say(f"<color=#FF6A00>** SCHEDULED {label.upper()} NOW{note} - server back in ~1 min **</color>")
         activity(f"firing scheduled {label}{note}", "!")
         try:
-            subprocess.Popen(["cmd", "/c", os.path.join(_BASE_DIR, "deploy.bat")], cwd=_BASE_DIR,
-                             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+            # 2026-09-21 Linux: deploy.sh / run.sh live next to this file (see ops-linux/)
+            if sys.platform == "win32":
+                subprocess.Popen(["cmd", "/c", os.path.join(_BASE_DIR, "deploy.bat")], cwd=_BASE_DIR,
+                                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+            else:
+                subprocess.Popen(["bash", os.path.join(_BASE_DIR, "deploy.sh")], cwd=_BASE_DIR,
+                                 start_new_session=True)
             it["status"] = "done"
             print(f"[sched] fired {label}{note} -> deploy.bat launched")
         except OSError as e:
@@ -7131,7 +7783,11 @@ def _apply_one_admin_command(rc, cmd, now_q):
     elif cmd.get("action") == "setvotemap":   # webcc Votemap settings: ballot size / mode / includes
         try:
             if set_votemap_cfg(cmd.get("key", ""), cmd.get("value")):
-                activity(f"Votemap: {cmd.get('key')} = {cmd.get('value')}", "MAP")
+                if cmd.get("key") == "variants":
+                    _vv = cmd.get("value") if isinstance(cmd.get("value"), dict) else {}
+                    activity(f"Votemap: mission variants set ({len(_vv)} mission(s) with variants)", "MAP")
+                else:
+                    activity(f"Votemap: {cmd.get('key')} = {cmd.get('value')}", "MAP")
                 if cmd.get("key") == "boot_map":      # FIX 4: pin it game-side the moment it is set
                     apply_boot_map_rotation("boot map set")
             else:
@@ -7453,9 +8109,15 @@ def set_cfg_dispatch(rc, key, value, owner):
             if key == "DedicatedServerConfig.VoteKick":   # legacy toggle: routed via run.bat --set-votekick
                 on = val.lower() in ("1", "true", "on", "yes")
                 try:
-                    subprocess.Popen(["cmd", "/c", os.path.join(_BASE_DIR, "run.bat"),
-                                      "--set-votekick", "on" if on else "off"], cwd=_BASE_DIR,
-                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    # 2026-09-21 Linux: deploy.sh / run.sh live next to this file (see ops-linux/)
+                    if sys.platform == "win32":
+                        subprocess.Popen(["cmd", "/c", os.path.join(_BASE_DIR, "run.bat"),
+                                          "--set-votekick", "on" if on else "off"], cwd=_BASE_DIR,
+                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    else:
+                        subprocess.Popen(["bash", os.path.join(_BASE_DIR, "run.sh"),
+                                          "--set-votekick", "on" if on else "off"], cwd=_BASE_DIR,
+                                         start_new_session=True)
                 except OSError as e:
                     return {"ok": False, "error": str(e)}
                 activity(f"ADMIN set in-game VoteKick = {'on' if on else 'off'}", "CFG")
@@ -7774,6 +8436,7 @@ def main():
     # shared-ranks daemon there too - so without the claim both processes would publish the same
     # presence file. The bot is the right owner: it is the one that maintains dashboard_state.json.
     _IS_BOT_PROCESS[0] = True
+    _activity_backfill_days()                    # 1.9.4 one-off: dates for the activity lines written before [DAY] lines
     rc = RemoteCommand(RCMD_HOST, RCMD_PORT)
     if LOCAL_CONSOLE_PATH:
         print("[bot] local console mode: tailing " + LOCAL_CONSOLE_PATH + " ; commands -> %s:%d" % (RCMD_HOST, RCMD_PORT))
@@ -7838,6 +8501,7 @@ def main():
     last_ranks_flush = 0.0        # last coalesced ranks.json write (time-played accrual)
     last_rank_push = 0.0          # last push of plugin_ranks.txt to the container
     last_state_write = 0.0        # last dashboard_state.json write (command-centre feed)
+    last_perf_log = 0.0           # 1.9.5: last perf_log.csv line
     last_mtime_poll = 0.0         # last get-mission-time poll (for the dashboard header)
     last_mirror_trim = time.time()  # last console_mirror.log size check
     mtime = [0, 0, 0]             # cached (currentTime, maxTime, fetched_at) for the dashboard
@@ -7890,6 +8554,10 @@ def main():
         votes = {}
         first_vote_at = {}
         open_vote(len(known_online))   # build a fresh ballot (force_pvp uses the live player count)
+        # owner 2026-10-08: two stages - this ballot becomes one option per mission; a lone mission skips straight
+        # to its time/weather vote
+        if vote_stage1() == 1 and VOTE_STAGE.get("stage") == 1:
+            vote_stage2(rc, {}, {}, CURRENT_MISSION, len(known_online), source="the only mission available")
         active_vote_duration = vote_duration()   # FIX 3: same length for the !votemap and mission-end ballots
         vote_reminder_sent = False               # allow one T-15s rebroadcast for this ballot
         announce_options(rc, active_vote_duration)
@@ -8023,6 +8691,7 @@ def main():
                 # Deduped so the duplicate "Mission complete" burst doesn't re-fire.
                 if MISSION_END_RE.search(scan):
                     EMPTY_FORCED_CUT["pending"] = False   # the rollover arrived on its own - no re-fire needed
+                    DRAW_CUT["pending"] = False           # a refused draw cut is moot once the mission has ended
                     if now - last_mission_end_at > 15:
                         last_mission_end_at = now
                         roster = get_players(rc)
@@ -8435,6 +9104,7 @@ def main():
                 # Empty-server forced-cut fallback: a cut fired while nobody was on was
                 # swallowed by the paused mission clock; the first join resumes the clock,
                 # so re-issue the cut and the queued map still loads (~ROLLOVER_SECONDS s).
+                service_draw_cut(rc, now)             # 1.8.5 audit: re-send a draw cut the relay refused
                 if EMPTY_FORCED_CUT["pending"] and current:
                     try:
                         _el_ec = find_number(rc.get_mission_time(), "current")
@@ -8489,6 +9159,7 @@ def main():
                         if nm_j:
                             queue_welcome(sid_j, nm_j)   # delayed ~5s; sent from the loop drain
                     for sid_l in known_online - current:
+                        pump_join_lines(now_leaving=sid_l)   # a held JOIN goes out before this LEFT
                         JOIN_LOGGED.discard(sid_l)    # so a rejoin is logged as a fresh join
                         nm_l = (PLAYER_NAMES.get(sid_l)
                                 or RANK_DATA.get(sid_l, {}).get("name") or "A pilot")
@@ -8579,6 +9250,7 @@ def main():
         pump_funds_announces(rc)                  # rank-funds lines held until the name resolves
         chat_tail_tick()                          # ordinary chat -> activity feed (plugin log tail)
         pump_persona_results()                    # apply background Steam name lookups (may set the push flag)
+        pump_join_lines()                         # held [JOIN] lines whose name resolved or whose grace expired
         _eom_win_timeout(rc, now)                 # a win frame whose award burst never arrived
 
         # coalesced ranks.json flush: time-played ticks every roster poll, and ranks.json is a
@@ -8596,6 +9268,7 @@ def main():
             _RANK_PUSH_FLAG[0] = False
             push_plugin_ranks()
 
+        tk_watch_push(now)                       # 1.9.4: teamkill watch list -> plugin (only when it differs)
         # --- command-centre feed: apply queued admin actions, refresh clock + state ---
         if process_admin_commands(rc):        # e.g. grant points; True => an admin 'Change map' just cut the match over
             suppress_mission_end_until = now + ROLLOVER_SECONDS + 25   # swallow the self-induced "Mission complete"
@@ -8673,6 +9346,12 @@ def main():
                 check_schedule(rc)            # fire any due scheduled restarts/updates (warns players first)
             except Exception as e:            # never let a schedule hiccup break the main loop
                 print(f"[sched] check error: {e}")
+        if now - last_perf_log >= 60:
+            last_perf_log = now
+            try:
+                perf_log_tick(len(known_online))
+            except Exception as e:                # noqa: BLE001 - never let the perf log break the loop
+                print(f"[perf-log] {e}")
         if now - last_state_write >= STATE_WRITE_INTERVAL:
             last_state_write = now
             approval_info = None
@@ -8744,6 +9423,18 @@ def main():
                 VOTE_OPTIONS.clear()
                 cooldown_until = now + POST_VOTE_COOLDOWN
                 continue
+            # owner 2026-10-08: the mission vote closed - put the winner's time/weather (or place) to a second vote
+            if VOTE_STAGE.get("stage") == 1 and VOTE_OPTIONS:
+                _n2 = vote_stage2(rc, votes, first_vote_at, CURRENT_MISSION, len(known_online))
+                votes = {}
+                first_vote_at = {}
+                if _n2 >= 2:
+                    vote_reminder_sent = False
+                    vote_ends_at = now + active_vote_duration
+                    announce_options(rc, active_vote_duration)
+                    activity(f"Variant vote open for {active_vote_duration}s - {_n2} options "
+                             f"(players type !1-!{_n2})", "VOTE")
+                    continue
             # "endmatch" is a forced context for the same reason "votemap" is: the winner must CUT the
             # live mission over, not merely be queued behind it. Without this the admin's End match
             # button banks the match, runs a ballot, announces a winner - and the match plays on.
@@ -8761,12 +9452,15 @@ def main():
             # the FIX 3 derivation that gap IS exactly the post-vote delay, so announce it DIRECTLY instead
             # of reading a possibly-stale live PostMissionDelay.
             if not force and VOTE_OPTIONS:
-                rc.say(f"<color=#9AD1FF>Loading the next map in ~{max(int(post_vote_delay()), 5)}s...</color>")
+                _left = int(round(float(VOTE_STAGE.get("opened") or now) + _effective_pmd() - now))
+                rc.say(f"<color=#9AD1FF>Loading the next map in ~{max(_left, 5)}s...</color>")
             cooldown_until = now + POST_VOTE_COOLDOWN
             if force:
                 # the mid-mission cut logs its own "Mission complete" ~ROLLOVER_SECONDS later;
                 # swallow that one so it doesn't immediately open a second (mission-end) vote.
                 suppress_mission_end_until = now + ROLLOVER_SECONDS + 25
+            VOTE_STAGE["stage"] = 0
+            VOTE_SHORT.clear()
             state = "IDLE"
 
         # post-vote verification: did OUR winner actually load? If not, leave the live mission alone.
@@ -9244,6 +9938,10 @@ def _sha256(path):
 _matchend_flagged_sha = None
 
 
+MATCHEND_DEPLOY_NOTIFY_ENABLED = False   # owner 2026-09-04: the match-end restart leg is disabled in the watchdog
+                                         # scripts ($MATCHEND_LEG_ENABLED) - never promise a restart that will not come
+
+
 def matchend_deploy_notify(rc, roster):
     """At the match-end moment: if a plugin update is staged (pending_plugin.dll + its
     pending_plugin.json sidecar present and the sha differs from the deployed one — the same
@@ -9254,6 +9952,8 @@ def matchend_deploy_notify(rc, roster):
     server is EMPTY (EmptyAutoDeploy owns that case), and EVERY failure path is silent —
     an announce/flag hiccup must never disturb match-end processing."""
     global _matchend_flagged_sha
+    if not MATCHEND_DEPLOY_NOTIFY_ENABLED:
+        return
     try:
         # EMPTY -> EmptyAutoDeploy's case, not ours. roster is the match-end get_players()
         # result, i.e. the same relay get-player-list that _deploy_online_players() trusts
@@ -9296,9 +9996,123 @@ def matchend_deploy_notify(rc, roster):
         print(f"[matchend-deploy] announce/flag skipped: {e}")
 
 
+class _PluginPublishSafeAbort(RuntimeError):
+    """Remote original was read back unchanged/restored; ordinary restart is safe."""
+
+
+class _PluginPublishUncertain(RuntimeError):
+    """Publication or restoration is unverified; callers must not issue power actions."""
+
+
+def _plugin_read_optional(sftp, path):
+    try:
+        with sftp.open(path, 'rb') as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def _plugin_rename_verified(sftp, source, target, expected):
+    try:
+        sftp.rename(source, target)
+    except Exception:
+        if _plugin_read_optional(sftp, target) == expected and _plugin_read_optional(sftp, source) is None:
+            return
+        raise
+    if _plugin_read_optional(sftp, target) != expected or _plugin_read_optional(sftp, source) is not None:
+        raise RuntimeError('Plugin rename did not verify exact destination bytes')
+
+
+def _publish_plugin_sftp(sftp, pending_path, target, expected_old_sha, expected_new_sha):
+    """Verified host-compatible replacement; retain original backups through restart.
+
+    The host rejects overwrite-rename. Save the old target under a unique name,
+    then rename a fully verified temporary file to the now-absent target. A lost
+    reply is resolved by readback. Safe aborts require the exact original live;
+    unresolved states raise _PluginPublishUncertain (CLI exit 5, no power action).
+    """
+    import hashlib
+    original = _plugin_read_optional(sftp, target)
+    if original is None:
+        raise _PluginPublishUncertain('Hosted plugin is absent before publication; hold power actions')
+    if expected_old_sha and hashlib.sha256(original).hexdigest() not in (expected_old_sha, expected_new_sha):
+        raise _PluginPublishUncertain('Hosted plugin differs from recorded baseline; hold for review')
+    with open(pending_path, 'rb') as stream:
+        new = stream.read()
+    if hashlib.sha256(new).hexdigest() != expected_new_sha:
+        if _plugin_read_optional(sftp, target) != original:
+            raise _PluginPublishUncertain('Hosted plugin changed while pending bytes were checked')
+        raise _PluginPublishSafeAbort('Pending bytes changed; hosted plugin was not modified')
+    if original == new:
+        return {'already_hosted': True, 'sha256': expected_new_sha, 'backup': None}
+    stamp = str(time.time_ns()) + '-' + str(os.getpid())
+    temp = target + '.deploy-' + stamp + '.new.tmp'
+    saved = target + '.deploy-' + stamp + '.old.tmp'
+    restore = target + '.deploy-' + stamp + '.restore.tmp'
+    backup_dir = os.path.join(_BASE_DIR, 'plugin_deploy_backups', stamp)
+    local_backup = os.path.join(backup_dir, 'NukeStats.before.dll')
+    owned_temps = []
+    try:
+        os.makedirs(backup_dir, exist_ok=False)
+        with open(local_backup, 'xb') as stream:
+            stream.write(original)
+        with open(local_backup, 'rb') as stream:
+            if stream.read() != original:
+                raise RuntimeError('Local original plugin backup did not verify')
+        if _plugin_read_optional(sftp, temp) is not None or _plugin_read_optional(sftp, saved) is not None:
+            raise RuntimeError('Unexpected plugin transaction filename collision')
+        with sftp.open(temp, 'wx') as stream:
+            owned_temps.append(temp)
+            stream.set_pipelined(True)
+            stream.write(new)
+        if _plugin_read_optional(sftp, temp) != new:
+            raise RuntimeError('Uploaded plugin temporary bytes did not verify')
+        if _plugin_read_optional(sftp, target) != original:
+            raise RuntimeError('Hosted plugin changed during temporary upload')
+        _plugin_rename_verified(sftp, target, saved, original)
+        if _plugin_read_optional(sftp, target) is not None:
+            raise RuntimeError('Plugin target appeared after saving original')
+        _plugin_rename_verified(sftp, temp, target, new)
+        return {'already_hosted': False, 'sha256': expected_new_sha,
+                'backup': local_backup, 'remote_backup': saved}
+    except Exception as original_error:
+        try:
+            live = _plugin_read_optional(sftp, target)
+            remote_saved = _plugin_read_optional(sftp, saved)
+            if live == new and remote_saved == original:
+                return {'already_hosted': False, 'sha256': expected_new_sha,
+                        'backup': local_backup, 'remote_backup': saved, 'resolved_lost_reply': True}
+            if live is None and remote_saved == original:
+                # Restore from a separate complete temporary copy; retain the saved original.
+                with sftp.open(restore, 'wx') as stream:
+                    owned_temps.append(restore)
+                    stream.set_pipelined(True)
+                    stream.write(original)
+                if _plugin_read_optional(sftp, restore) != original:
+                    raise RuntimeError('Plugin restoration temporary bytes did not verify')
+                _plugin_rename_verified(sftp, restore, target, original)
+                live = _plugin_read_optional(sftp, target)
+            if live != original:
+                raise RuntimeError('Unexpected/unreadable hosted plugin; preserve all backups')
+        except Exception as recovery_error:
+            raise _PluginPublishUncertain('Plugin publication unresolved; hold power actions. Local original: ' +
+                local_backup + '; remote original: ' + saved + '; recovery=' + type(recovery_error).__name__) from original_error
+        raise _PluginPublishSafeAbort('Plugin publication aborted; original read back intact. Backups: ' +
+            local_backup + ' / ' + saved + '; cause=' + type(original_error).__name__) from original_error
+    finally:
+        for path in owned_temps:
+            try:
+                sftp.remove(path)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                # A network outage must preserve the original exception/uncertainty status.
+                pass
+
+
 def deploy_plugin_job(dry=False, force=False):
     """Daily ~05:00 job (run via run.bat --deploy-plugin so the SFTP env is set). Stages a pending
-    plugin DLL (atomic, mmap-safe) if it differs from the last deployed one, then RESTARTS the game
+    plugin DLL (verified, original retained) if it differs from the last deployed one, then RESTARTS the game
     server (stop -> offline -> start -> relay-verified) so the new DLL loads. GUARDRAIL: from the
     stop onward, any failure forces a START. --deploy-plugin-dry does pre-flight + reports state and
     what WOULD happen, with NO power/upload actions (safe to run against the live server).
@@ -9312,6 +10126,7 @@ def deploy_plugin_job(dry=False, force=False):
             upload failed). The game was NOT restarted.
         3 = deliberately deferred: players online and not --force. The game was NOT restarted.
         4 = power actions were taken but the server did not come back verified (CRIT) — unhealthy.
+        5 = hosted plugin publication is unverified; HOLD further power actions and recover originals.
     Any non-zero means "do not assume the game restarted"."""
     tag = "DRY-RUN" if dry else ("DEPLOY-FORCE" if force else "DEPLOY")
     _deploy_log(f"=== {tag} start ===")
@@ -9377,45 +10192,62 @@ def deploy_plugin_job(dry=False, force=False):
         if online_count != 0 and force:
             _deploy_log(f"FORCE: proceeding with {online_count} player(s) online (match will restart / players kicked).")
 
-        # upload the new DLL FIRST, while the server is still up (atomic rename is mmap-safe).
+        # Publish complete verified bytes with retained originals; this host cannot overwrite-rename.
         if have_update:
-            uploaded = False
+            ssh = None
             try:
                 ssh, sftp = _open_sftp()
-                try:
-                    tmp = REMOTE_PLUGIN + ".deploytmp"
-                    sftp.put(PENDING_DLL, tmp)
-                    try:
-                        sftp.posix_rename(tmp, REMOTE_PLUGIN)
-                    except Exception:                # noqa: BLE001
-                        try: sftp.remove(REMOTE_PLUGIN)
-                        except Exception: pass        # noqa: BLE001
-                        sftp.rename(tmp, REMOTE_PLUGIN)
-                finally:
-                    ssh.close()
-                _deploy_log(f"uploaded plugin atomically -> {REMOTE_PLUGIN}")
-                uploaded = True
+                sftp.get_channel().settimeout(30)
+                publication = _publish_plugin_sftp(sftp, PENDING_DLL, REMOTE_PLUGIN, old_hash, new_hash)
+                _deploy_log('plugin publication verified -> ' + REMOTE_PLUGIN +
+                            '; original backup=' + str(publication.get('backup')))
+            except _PluginPublishSafeAbort as e:
+                _deploy_log('ABORT: safe plugin upload failure; original verified intact: ' + str(e))
+                return 2
+            except Exception as e:
+                # Includes transport failures: no blind panel overwrite or power action on uncertainty.
+                _deploy_log('HOLD: plugin publication unverified; NO power action. ' + type(e).__name__ + ': ' + str(e))
+                return 5
+            finally:
+                if ssh is not None:
+                    try: ssh.close()
+                    except Exception: pass
+
+        try:
+            st0 = _pt_state(cfg)
+        except Exception:                        # noqa: BLE001
+            st0 = "?"
+        _deploy_log(f"pre-restart panel state={st0}")
+
+        # Upload can outlast the empty-player check. Recheck immediately before the
+        # power-action guardrail: a deliberate defer must never fall through to its START.
+        if not force:
+            try:
+                online_count = len(_deploy_online_players())
+                _deploy_log(f"final pre-power player check: {online_count} online")
             except Exception as e:                   # noqa: BLE001
-                _deploy_log(f"WARN: SFTP upload failed ({e}); trying panel files/write fallback")
+                st_off = None
                 try:
-                    code = _pt_upload_plugin_bytes(cfg, PENDING_DLL, REMOTE_PLUGIN)
-                    _deploy_log(f"uploaded plugin via panel files/write -> {REMOTE_PLUGIN} (HTTP {code})")
-                    uploaded = True
+                    st_off = _pt_state(cfg)          # fresh probe, never reuse the pre-upload state
                 except Exception as e2:              # noqa: BLE001
-                    _deploy_log(f"ABORT: upload FAILED SFTP+panel ({e2}). Server untouched (still up). Retry next run.")
+                    _deploy_log(f"WARN: final panel state probe also failed: {e2}")
+                if st_off == "offline":
+                    online_count = 0
+                    st0 = st_off                    # use the freshest confirmed power state
+                    _deploy_log(f"final player check failed ({e}) but panel state=offline -> treating as EMPTY")
+                else:
+                    _deploy_log(f"ABORT: final empty-server check failed ({e}; panel state={st_off or '?'}). "
+                                "No power action taken; pending update retained for retry.")
                     return 2
-            if not uploaded:
-                _deploy_log("ABORT: upload did not complete. Server untouched."); return 2
+            if online_count != 0:
+                _deploy_log(f"DEFER: {online_count} player(s) joined before restart. "
+                            "No power action taken; pending update retained for retry.")
+                return 3
 
         # restart: STOP -> KILL-if-stuck/hung -> wait offline -> START -> verify via relay.
         # xgamingserver hazard: already-stopping/starting rejects START until KILL clears it.
         rc_restart = 0
         try:
-            try:
-                st0 = _pt_state(cfg)
-            except Exception:                        # noqa: BLE001
-                st0 = "?"
-            _deploy_log(f"pre-restart panel state={st0}")
             if st0 in ("stopping", "starting"):
                 _deploy_log(f"stuck state={st0} -> KILL immediately (no graceful STOP wait)")
                 _pt_power_signal(cfg, "kill")
@@ -10304,7 +11136,9 @@ def refresh_mission_audit(deep=True):
             # enabled put a dead mission on the ballot; winning it left the rotation stuck.
             present = name in on_disk
             row = {"name": name, "group": grp, "enabled": present, "official": official}
-            if not present:
+            if not present and grp != "BuiltIn":
+                # a BuiltIn scenario ships inside the game and never has a User folder; flagging
+                # "Escalation Co-op as BDF" as missing on every scan was a false positive (2026-09-05)
                 row["missing"] = True
                 l_missing.append(name)
             if official:
@@ -10692,7 +11526,7 @@ def sync_effective_pmd():
         pass
     r = set_server_config("PostMissionDelay", want, _internal=True)
     if isinstance(r, dict) and r.get("ok"):
-        activity(f"Post-mission delay synced to {int(want)}s (vote {vote_duration()}s + post-vote {post_vote_delay()}s)", "CFG")
+        activity(f"Post-mission delay synced to {int(want)}s ({'2 votes' if _vote_two_stage() else 'vote'} of {vote_duration()}s + post-vote {post_vote_delay()}s)", "CFG")
     else:
         activity(f"Post-mission delay sync FAILED ({(r or {}).get('error', '?')}) - vote timing set, server delay unchanged", "!")
     return r
@@ -10922,6 +11756,15 @@ def setup_server():
         "  echo '[relay] NO RELAY TOOL found in container' >> ./logs/relay.log\n"
         "fi\n"
         "tail -n +1 -F ./logs/console.log 2>/dev/null &\n"
+        # owner 2026-10-09: the panel marks a server running when its console shows the game's ready line. Nothing this
+        # wrapper prints reaches that console (the start command preloads Doorstop into this shell and its stdout ends
+        # up on relay.log), so a clean shell watches the log and writes the line straight to the console (/proc/1/fd/1).
+        "env -u LD_PRELOAD ls -l /proc/1/fd /proc/$$/fd >> ./logs/relay.log 2>&1\n"
+        "env -u LD_PRELOAD -u DOORSTOP_ENABLED -u DOORSTOP_ENABLE sh -c 'i=0; while [ \"$i\" -lt 900 ]; do "
+        "if grep -q \"Waiting for Players before loading next map\" ./logs/console.log 2>/dev/null; then "
+        "echo \"[DedicatedServerManager] Waiting for Players before loading next map\" > /proc/1/fd/1; "
+        "echo \"[wrapper] ready line sent to the panel after ${i}s\" >> ./logs/relay.log; break; fi; "
+        "sleep 2; i=$((i+2)); done' >/dev/null 2>&1 &\n"
         "exec ./NuclearOptionServer"
         f' -logFile ./logs/console.log -limitframerate {tick} -ServerRemoteCommands 5504 "$@"\n'
     )

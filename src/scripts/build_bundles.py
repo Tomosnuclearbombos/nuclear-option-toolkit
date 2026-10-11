@@ -86,7 +86,7 @@ def dll_version_ok(src_dll=None, version=None):
 
 # Admin-side files (live at the bundle root; the bot/web CC + their launchers + templates).
 ADMIN_FILES = [
-    "no_mapvote_bot.py", "cc_web.py", "webcc.html", "command_centre.py", "map_atlas.py",
+    "no_mapvote_bot.py", "cc_web.py", "webcc.html", "command_centre.py", "map_atlas.py", "acmi_live.py",
     "settings_catalogue.json", "heartland_map.png", "ignus_map.png",
     "config.example.json", "anz.nukestats.cfg.example",
     "webcc.bat", "commandcentre.bat", "status.bat", "say.bat",
@@ -169,6 +169,8 @@ def _stage_admin(clean, bundle, spec):
         src = os.path.join(clean, name)
         if os.path.exists(src):
             _copy(src, os.path.join(bundle, name))
+    if os.path.isdir(os.path.join(clean, "map_models")):     # 1.9.0: unit icons, next to cc_web.py
+        _copytree(os.path.join(clean, "map_models"), os.path.join(bundle, "map_models"))
     for name in spec["installer"]:
         src = os.path.join(clean, "installer", name)
         if os.path.exists(src):

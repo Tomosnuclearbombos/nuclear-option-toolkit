@@ -45,12 +45,13 @@ ROOT = os.path.dirname(HERE)
 REPO_ROOT = os.path.dirname(ROOT)
 
 # Files taken from the REPO ROOT (docs + licence).
-REPO_ROOT_FILES = ["README.md", "SECURITY.md", "LICENSE"]
+REPO_ROOT_FILES = ["README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"]
 
 # Files taken from src/ (ROOT): product source, map assets, launchers, config templates.
 ROOT_FILES = [
     # runtime / product source
     "no_mapvote_bot.py", "cc_web.py", "command_centre.py", "map_atlas.py",
+    "acmi_live.py",                      # 1.9.0: NOBlackBox live-map follower (optional; cc_web imports it)
     "webcc.html", "settings_catalogue.json",
     # map assets (rendered PNGs the web map needs)
     "heartland_map.png", "ignus_map.png",
@@ -78,6 +79,7 @@ TREE_INCLUDES = {
     "NukeStats":  ["libs/*", "bin/*", "obj/*", "bepinex_pack/*", "bepinex_pack_win/*"],  # proprietary/build/binaries (bundles re-add from source)
     "map-build":  ["__pycache__/*"],
     "relay":      [],                                            # localhost->WAN remote-command relay
+    "map_models": ["*.bak*"],                                    # 1.9.0: unit icons the live map draws
     "START HERE": ["*.lnk"],                                      # machine-specific shortcut
 }
 
@@ -176,7 +178,6 @@ def scrub_design_history(text):
 SCRUBS = {
     "no_mapvote_bot.py": scrub_bot,
     "NukeStats/NukeStatsPlugin.cs": scrub_plugin,
-    "docs/INSTALL_SOURCES.md": strip_preamble,
 }
 
 # ---------------------------------------------------------------------------

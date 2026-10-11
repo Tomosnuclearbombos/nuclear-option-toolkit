@@ -28,7 +28,6 @@
     "PvE.TimeoutForceDefeat": true,
     "Cleanup.DismountedPilots": true,
     "Teamkill.Enforce": true,
-    "AILimit.Enforce": true,
     "Flood.LogDrops": true,
     "Flood.DropDeadNetIdRpcs": true,
     "Flood.DeadNetIdKickStrikes": 3

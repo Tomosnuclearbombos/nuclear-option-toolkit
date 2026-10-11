@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.4.7";
+        public const string Version = "1.9.0";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -134,11 +134,9 @@ namespace NukeStats
         internal static ConfigEntry<bool> HideRepairMessages;    // native "repaired/rearmed/refueled" notification; ON = hide/suppress (cfg-only toggle; no webcc row)
         internal static ConfigEntry<bool> CleanupPilots;         // periodically despawn old dismounted pilots
         internal static ConfigEntry<int> PilotLifetime;          // seconds a dismounted pilot may linger before cleanup
-        internal static ConfigEntry<bool> AiLimit;               // AI aircraft limiter (perf precaution)
         internal static ConfigEntry<bool> TimeoutForceDefeat;    // PvE: force human defeat on mission-timer expiry
         internal static ConfigEntry<bool> PvpTimeoutResult;      // PvP: on timeout the higher total in-game score wins (tie = draw)
         internal static ConfigEntry<int>  TimeoutLeadSeconds;    // fire the timeout resolution this many seconds BEFORE MaxTime (so the map vote runs before rotation)
-        internal static ConfigEntry<int> AiPerTeamCap, AiTotalCap, AiStuckSeconds, AiStuckRadius;
         internal static ConfigEntry<int> PvpStartingRank;        // PvP (both factions joinable): floor every player's start to this in-game rank (0 = off)
         internal static ConfigEntry<bool> ForfeitEnabled;        // PvP: allow a team to vote to surrender via !forfeit / !f
         internal static ConfigEntry<int>  ForfeitCooldownSeconds; // seconds before a team can START another forfeit vote
@@ -151,6 +149,7 @@ namespace NukeStats
         internal static ConfigEntry<int>    AnnihilateMinMatchSeconds;
         internal static ConfigEntry<int>    AnnihilateMinPlayers;
         internal static ConfigEntry<string> AnnihilateBothDead;      // noop | draw
+        internal static ConfigEntry<string> AnnihilateExcludeMissions; // 1.8.5: comma-separated mission-name prefixes where it never fires
         // 1.2.4: FloodEnforce / FloodPerSec / FloodBurst / FloodOrderSpamKickSeconds are GONE with layer A
         // (see the "why layer A was removed" note above FleetOrderFloodPatch).
         internal static ConfigEntry<bool> FloodLogDrops, FloodDropDeadNet;   // LogDrops is a LAYER D control (DropInboundRpc)
@@ -207,6 +206,11 @@ namespace NukeStats
         {
             Instance = this; Log = Logger;
             _cfgFile = Config;   // cache the ConfigFile NOW — it survives the GameObject being destroyed, whereas Instance.Config later reads as Unity-null
+            AiAirportRotation.Initialize(Config);
+            AirbaseTaxi.Initialize(Config);     // 1.9.6 test 4: AI taxi/takeoff fixes (parts of Appulcake's AI Plane Unstuck)
+            PingKick.Initialize(Config);        // 1.9.1: high-ping kicker
+            TkWatch.Initialize(Config);         // 1.9.4: teamkill watch list
+            Perf.Initialize(Config);            // 1.9.5: frame timing + job worker count
             OpenStaleNetGrace(60f);   // never strike stale netIds during boot/first scene load (AdvanceGame re-opens it per mission)
             try { DontDestroyOnLoad(gameObject); } catch { }   // try to survive scene loads on the dedicated server
             WinPoints       = Config.Bind("Scoring", "WinPoints", 200, "Points to each player on the winning side.");
@@ -304,6 +308,8 @@ namespace NukeStats
             //      (classic AND; 1.1.11 restores pre-1.1.10). Held for GraceSeconds.
             //      Empty air alone (planes==0 with hangars still up) does NOT end the match when RequireNoSpawn is on.
             //      PvE OK (PvPOnly default false). ----
+            AnnihilateExcludeMissions = Config.Bind("Annihilate", "ExcludeMissions", "",
+                "Comma-separated mission-name PREFIXES on which the Annihilate auto-win never fires. Case-insensitive.");
             AnnihilateEnabled = Config.Bind("Annihilate", "Enabled", true,
                 "Auto-declare victory when one side has NO planes AND cannot spawn (no hangars), sustained for GraceSeconds. "
                 + "Spawn probe = FactionHQ.GetAirbases + Airbase.AnyHangarsAvailable. "
@@ -447,17 +453,12 @@ namespace NukeStats
                 + "for every player-caused unit death. The game exposes no max-HP, so total-credited-damage-at-death is the "
                 + "best proxy for a unit effective HP pool - collected over time it builds an empirical per-unit kill-threshold "
                 + "table used to calibrate the teamkill MinDamage floor. Log-only; no gameplay effect.");
-            AiLimit         = Config.Bind("AILimit", "Enforce", true,
-                "Performance precaution: cap AI aircraft and clear stuck ones. ONLY ever removes AI aircraft, never players.");
-            AiPerTeamCap    = Config.Bind("AILimit", "PerTeamAICap", 32,
-                "Max AI aircraft flying per faction. The excess (grounded/lowest first) is destroyed.");
-            AiTotalCap      = Config.Bind("AILimit", "TotalAircraftCap", 64,
-                "Max TOTAL aircraft (AI + players, all sides). When exceeded, AI is removed from the side with the " +
-                "MOST aircraft until at/under the cap -- a player is never force-ejected, only AI.");
-            AiStuckSeconds  = Config.Bind("AILimit", "StuckSeconds", 45,
-                "A GROUNDED AI aircraft that has not moved for this many seconds is cleared (frees a clogged runway). 0 = off.");
-            AiStuckRadius   = Config.Bind("AILimit", "StuckRadiusMetres", 25,
-                "Movement radius (metres) under which a grounded AI counts as 'not moving' for the stuck check.");
+            // 1.9.5 (owner 2026-10-06: "the AI limiter can be removed, we limit AI via the mission file now anyway"):
+            // the AILimit.* binds are deleted with the limiter. They live on in RetiredCfgKeys (accepted and ignored by
+            // setcfg); BepInEx keeps them untouched in an existing cfg. It was off on both servers (Enforce = false).
+            // 1.2.4: Flood.Enforce / FleetOrdersPerSec / FleetOrderBurst / OrderSpamKickSeconds are DELETED
+            // along with layer A. They live on in RetiredCfgKeys (accepted-and-ignored by setcfg) and BepInEx
+            // re-serialises them untouched in an existing cfg, so no cfg surgery is needed on a live server.
             FloodLogDrops   = Config.Bind("Flood", "LogDrops", true,
                 "Log (throttled, at most once per 5s per connection) the name/SteamID of a sender whose inbound RPCs are "
                 + "being rate-dropped by the Layer D inbound guard (Flood.InboundRpcGuard). 1.2.4: this no longer has "
@@ -752,7 +753,7 @@ namespace NukeStats
             }
             catch (Exception e) { Log.LogError("[errkick] guard F patch failed (error-kick system runs native): " + e); }
 
-            Log.LogInfo($"NukeStats {Version} loaded (+ team balance: autobalance fires ONLY on a LEAVE, then WARNS and waits before moving; protection tiers = new joiners (<{(BalanceNewJoinerSeconds!=null?BalanceNewJoinerSeconds.Value:900)}s, strongest) > then the best rank-evening pick; join-the-fuller-side = INSTANT spectate, no warning; + PvP !forfeit team-surrender vote (cd {ForfeitCooldownSeconds.Value}s); + PvP start-rank floor={PvpStartingRank.Value}; + admin !setrank/!setfunds/!addfunds; + live-map entity feed: AI aircraft + ships, heli/plane; + AI aircraft limiter: per-team {AiPerTeamCap.Value}/total {AiTotalCap.Value} caps + {AiStuckSeconds.Value}s stuck-runway clear @5s scan; AI-only, never players; LIFE EVENTS: a life ends ONLY on death/air-eject, survives disconnect + match-end (no match-end eject), balance/admin moves are life-NEUTRAL; strategic-strike announce removed; PvP balance: joinable-only team detect [spectate-move]; radar/spotting + jamming score VANILLA [per-player breaker armed]; FLOOD GUARD: A=REMOVED in 1.2.4 (the game already caps move commands at ~5/s per player; ours counted clicks, not wire RPCs, and false-kicked honest players) - move orders are NEVER dropped/warned/kicked by this plugin; B=silent-drop ServerRpc to dead netId [{(FloodDropDeadNet!=null&&FloodDropDeadNet.Value?"on":"off")}] + stale-netId exploit strikes -> stops match-start mass-DC; autobalance: never under MinPlayers={(BalanceMinPlayers!=null?BalanceMinPlayers.Value:6)} + {(BalanceWarnSeconds!=null?BalanceWarnSeconds.Value:300)}s WARNED hold, then MOVES the picked player via the swap mechanic (Cricket spawned high over open ocean (Swap.Altitude)); admin !swapteam/!forceteamswap [team swap + Cricket spawn HIGH over open ocean + eject -> UI reset, life/points-neutral]; + LIVE CONFIG (webcc settings menu via setcfg/dumpcfg -> live ConfigEntry edit + Config.Save)). RankFile={RankFilePath}");
+            Log.LogInfo($"NukeStats {Version} loaded (+ team balance: autobalance fires ONLY on a LEAVE, then WARNS and waits before moving; protection tiers = new joiners (<{(BalanceNewJoinerSeconds!=null?BalanceNewJoinerSeconds.Value:900)}s, strongest) > then the best rank-evening pick; join-the-fuller-side = INSTANT spectate, no warning; + PvP !forfeit team-surrender vote (cd {ForfeitCooldownSeconds.Value}s); + PvP start-rank floor={PvpStartingRank.Value}; + admin !setrank/!setfunds/!addfunds; + live-map entity feed: AI aircraft + ships, heli/plane; LIFE EVENTS: a life ends ONLY on death/air-eject, survives disconnect + match-end (no match-end eject), balance/admin moves are life-NEUTRAL; strategic-strike announce removed; PvP balance: joinable-only team detect [spectate-move]; radar/spotting + jamming score VANILLA [per-player breaker armed]; FLOOD GUARD: A=REMOVED in 1.2.4 (the game already caps move commands at ~5/s per player; ours counted clicks, not wire RPCs, and false-kicked honest players) - move orders are NEVER dropped/warned/kicked by this plugin; B=silent-drop ServerRpc to dead netId [{(FloodDropDeadNet!=null&&FloodDropDeadNet.Value?"on":"off")}] + stale-netId exploit strikes -> stops match-start mass-DC; autobalance: never under MinPlayers={(BalanceMinPlayers!=null?BalanceMinPlayers.Value:6)} + {(BalanceWarnSeconds!=null?BalanceWarnSeconds.Value:300)}s WARNED hold, then MOVES the picked player via the swap mechanic (Cricket spawned high over open ocean (Swap.Altitude)); admin !swapteam/!forceteamswap [team swap + Cricket spawn HIGH over open ocean + eject -> UI reset, life/points-neutral]; + LIVE CONFIG (webcc settings menu via setcfg/dumpcfg -> live ConfigEntry edit + Config.Save)). RankFile={RankFilePath}");
             WebNameProbe();   // 1.1.40: prove the name lookup's TLS path on this container
             DumpCfg();   // emit an initial [NOSTATS] cfg snapshot so the webcc settings menu has live values on load
             try { var tgo = new GameObject("NukeStatsTicker"); DontDestroyOnLoad(tgo); tgo.AddComponent<Ticker>(); Log.LogInfo("[diag] NukeStatsTicker up (fallback periodic driver; survives mission/scene changes)"); }
@@ -783,29 +784,61 @@ namespace NukeStats
                 int frame = UnityEngine.Time.frameCount;
                 if (frame == _lastPeriodicFrame) return;
                 _lastPeriodicFrame = frame;
+                Perf.LapStart();
+                Perf.Tick();                          // 1.9.5: frame timing window + job worker count (1 Hz check)
+                Perf.Lap(29);
                 PerfTick();                           // server frametime sampler (smoothed ms; emitted on the net line)
+                Perf.Lap(0);
+                Humans();                             // 1.9.6 test 3: build the frame's player list here so its cost has its own lap
+                Perf.Lap(30);
                 RttProbeTick();                       // per-player RTT: Steam m_nPing preferred; Notify ACK fallback
+                Perf.Lap(1);
                 MaybeEmitFactionColours();            // one-shot vanilla faction.color → hex for bot/WebCC
+                Perf.Lap(2);
                 PvETimeoutTick();                     // PvE: force human defeat when the mission timer expires
+                Perf.Lap(3);
                 AnnihilateTick();                     // no planes AND no hangars -> ForceVictory (grace)
+                Perf.Lap(5);
+                PingKick.Tick();                      // 1.9.1: high-ping kicker (1 Hz; on above the player threshold only)
+                Perf.Lap(7);
+                TkWatch.Tick();                       // 1.9.4: teamkill watch list join warning (1 Hz)
+                Perf.Lap(8);
                 NameTick();                           // 1.1.28: pump async Steam name resolution + OnNameResolved re-snap
+                Perf.Lap(9);
                 PumpWebNames();                       // 1.1.38: apply server-side Steam web lookups (placeholder killer)
+                Perf.Lap(10);
                 PumpJoinAnnounces();                  // 1.1.28: ranked join lines waiting on name resolution (<=8s)
+                Perf.Lap(11);
                 MaybeSnapshot();
+                Perf.Lap(12);
                 MaybeCleanupPilots();
+                Perf.Lap(13);
                 MaybeBalance();
+                Perf.Lap(14);
                 PumpPendingBalance();                 // apply deferred balance moves once the pick lands/dies
+                Perf.Lap(15);
                 PumpBounces();                        // bounce wrong-team joiners to spectate (cheap when idle)
+                Perf.Lap(16);
                 LifeTick();                           // life/aircraft-state scan: map death crosses + bail/balance ledger upkeep
+                Perf.Lap(17);
                 PosTick();                            // live map: ~0.5s plane position + heading broadcast
+                Perf.Lap(18);
                 MapEntTick();                         // live map: ~1s AI aircraft + ships (with heading)
+                Perf.Lap(19);
                 TkTick();                             // teamkill enforcement (warn/eject/kick/ban)
+                Perf.Lap(20);
                 GriefTick();                          // 1.2.4: TELEMETRY ONLY — rolls order attempts into the net frame's "streak"; no longer kicks anything
-                AiLimitTick();                        // AI aircraft limiter (cap + stuck-runway clear)
+                Perf.Lap(22);
+                AirPanelTick();                       // webcc Team panel aircraft count (5 s); 1.9.5: the AI limiter is gone
+                Perf.Lap(23);
                 CatchupTick();                        // rank catch-up: raise already-connected players below the risen floor
+                Perf.Lap(24);
                 RankFundsTick();                      // accumulative rank funds: grant on any in-game rank increase
+                Perf.Lap(25);
                 LimboWatchTick();                     // 1.1.30: loud diag when a rejoined player sits on a faction with no aircraft (reconnect desync)
+                Perf.Lap(26);
                 PollCommands();
+                Perf.Lap(27);
             }
             catch (Exception e) { Log?.LogError("PeriodicTick: " + e); }
         }
@@ -1455,6 +1488,7 @@ namespace NukeStats
             if (string.IsNullOrEmpty(sid) || sid == "0") return;
             if (ms < 1f || ms > 30000f) return;
             _rttLatest[sid] = ms;
+            PingKick.OnSample(sid, ms);   // 1.9.1: 30 s average for the high-ping kicker
             if (!_rttEma.TryGetValue(sid, out var ema) || ema <= 0f)
                 _rttEma[sid] = ms;
             else
@@ -1602,13 +1636,130 @@ namespace NukeStats
             catch { return false; }
         }
 
+        // 1.9.6 test 3 (owner 2026-10-09 "fix ours too"): the Steam ping read runs on its own thread. On 10-09 one
+        // RttProbe tick held a frame for 81 ms (and another for 9 ms), most likely waiting inside Steam's networking
+        // library while it was busy. The frame now only hands each player's connection id to the ping thread and picks up
+        // the answers it has finished; Steam's networking calls may be made from any thread. A player whose Steam read
+        // gives no answer is measured with the Notify probe next time, as before. If the thread cannot start, the old
+        // in-frame read is used.
+        static readonly object _rttLock = new object();
+        static readonly Queue<KeyValuePair<string, object>> _rttAsk = new Queue<KeyValuePair<string, object>>();
+        static readonly Queue<KeyValuePair<string, int>> _rttAnswers = new Queue<KeyValuePair<string, int>>();
+        static readonly HashSet<string> _rttAsked = new HashSet<string>();      // main thread only: waiting on the thread
+        static readonly HashSet<string> _rttSteamMiss = new HashSet<string>();  // main thread only: use Notify next time
+        static readonly System.Threading.AutoResetEvent _rttWake = new System.Threading.AutoResetEvent(false);
+        static System.Threading.Thread _rttThread;
+        static bool _rttThreadFailed;
+        static float _rttThreadLastAnswer = -1f;
+
+        static bool RttThreadReady()
+        {
+            if (_rttThread != null) return true;
+            if (_rttThreadFailed) return false;
+            try
+            {
+                _rttThread = new System.Threading.Thread(RttWorker) { IsBackground = true, Name = "NukeStats ping" };
+                _rttThread.Start();
+                Log?.LogInfo("[rtt] Steam ping reads moved to their own thread");
+                return true;
+            }
+            catch (Exception e)
+            {
+                _rttThread = null;
+                _rttThreadFailed = true;
+                Log?.LogWarning("[rtt] ping thread could not start, reading in the frame as before (" + e.GetBaseException().Message + ")");
+                return false;
+            }
+        }
+
+        // The ping thread: never touches Unity or Mirage, only Steam's networking API through the resolved reflection.
+        static void RttWorker()
+        {
+            while (true)
+            {
+                try
+                {
+                    _rttWake.WaitOne(1000);
+                    while (true)
+                    {
+                        KeyValuePair<string, object> job;
+                        lock (_rttLock)
+                        {
+                            if (_rttAsk.Count == 0) break;
+                            job = _rttAsk.Dequeue();
+                        }
+                        int ping = 0;
+                        try
+                        {
+                            if (!InvokeSteamRealTimeStatus(_rttSteamGsGetStatus, job.Value, out ping)
+                                && !InvokeSteamRealTimeStatus(_rttSteamGetStatus, job.Value, out ping))
+                                ping = 0;
+                        }
+                        catch { ping = 0; }
+                        lock (_rttLock) _rttAnswers.Enqueue(new KeyValuePair<string, int>(job.Key, ping));
+                    }
+                }
+                catch { }   // never let the thread die on one bad read
+            }
+        }
+
+        // Main thread: the player's Steam connection id for the ping thread (no Steam call here).
+        static bool TryGetSteamConnId(Player p, out object connId)
+        {
+            connId = null;
+            EnsureSteamRttResolved();
+            if (_rttSteamUnavailable) return false;
+            try
+            {
+                if (!(p?.Owner is NetworkPlayer np)) return false;
+                object handle = ReflectGet(np, "ConnectionHandle");
+                if (handle == null || _rttSteamConnT == null || !_rttSteamConnT.IsInstanceOfType(handle)) return false;
+                connId = _rttSteamConnIdField.GetValue(handle);
+                return connId != null;
+            }
+            catch { return false; }
+        }
+
+        static void DrainRttAnswers(float now)
+        {
+            List<KeyValuePair<string, int>> got = null;
+            lock (_rttLock)
+            {
+                if (_rttAnswers.Count == 0) return;
+                got = new List<KeyValuePair<string, int>>(_rttAnswers);
+                _rttAnswers.Clear();
+            }
+            _rttThreadLastAnswer = now;
+            foreach (var a in got)
+            {
+                if (!_rttAsked.Remove(a.Key)) continue;   // the player left while the read was out
+                if (a.Value >= 1 && a.Value <= 30000) { NoteRttSample(a.Key, a.Value); _rttSteamMiss.Remove(a.Key); }
+                else _rttSteamMiss.Add(a.Key);
+            }
+        }
+
+        // A read that never comes back means the ping thread is stuck inside Steam: stop asking Steam (the Notify probe
+        // keeps measuring) rather than wait or read in the frame.
+        static float _rttFirstAskAt = -1f;
+        static void RttThreadWatchdog(float now)
+        {
+            if (_rttAsked.Count == 0 || _rttSteamUnavailable) return;
+            if (now - Mathf.Max(_rttThreadLastAnswer, _rttFirstAskAt) < 15f) return;
+            _rttSteamUnavailable = true;
+            _rttAsked.Clear();
+            Log?.LogWarning("[rtt] the ping thread has not answered for 15 s - Steam ping reads stopped, Notify probe only");
+        }
+
         internal static void RttProbeTick()
         {
             try
             {
+                float now = Time.realtimeSinceStartup;
+                DrainRttAnswers(now);
+                RttThreadWatchdog(now);
                 var humans = Humans();
                 if (humans.Count == 0) return;
-                float now = Time.realtimeSinceStartup;
+                bool threaded = !_rttSteamUnavailable && RttThreadReady();
                 foreach (var p in humans)
                 {
                     string id = Sid(p);
@@ -1616,13 +1767,27 @@ namespace NukeStats
                     float last = _rttLastProbe.TryGetValue(id, out var lp) ? lp : -999f;
                     if (now - last < RttProbeIntervalSec) continue;
 
-                    // 1) Steam transport ping (matches server-list / HostPing ballpark)
-                    if (TryReadSteamRttMs(p, out float steamMs))
+                    // 1) Steam transport ping (matches server-list / HostPing ballpark), read on the ping thread
+                    if (threaded && !_rttSteamMiss.Contains(id))
+                    {
+                        if (_rttAsked.Contains(id)) continue;   // its last read has not come back yet
+                        if (TryGetSteamConnId(p, out object connId))
+                        {
+                            if (_rttAsked.Count == 0) _rttFirstAskAt = now;
+                            lock (_rttLock) _rttAsk.Enqueue(new KeyValuePair<string, object>(id, connId));
+                            _rttAsked.Add(id);
+                            _rttLastProbe[id] = now;
+                            _rttWake.Set();
+                            continue;
+                        }
+                    }
+                    else if (!threaded && TryReadSteamRttMs(p, out float steamMs))
                     {
                         NoteRttSample(id, steamMs);
                         _rttLastProbe[id] = now;
                         continue;
                     }
+                    _rttSteamMiss.Remove(id);              // Notify this time, Steam again next time
 
                     // 2) Notify fallback (raw socket notify — no NetworkPingMessage / no app handler)
                     if (_rttNotifyDisabled) continue;
@@ -1684,6 +1849,8 @@ namespace NukeStats
                 prune(_rttLatest); prune(_rttEma); prune(_rttLastProbe);
                 foreach (var k in new List<string>(_rttInFlight))
                     if (!present.Contains(k)) _rttInFlight.Remove(k);
+                _rttAsked.RemoveWhere(k => !present.Contains(k));       // 1.9.6 test 3: the ping thread's bookkeeping
+                _rttSteamMiss.RemoveWhere(k => !present.Contains(k));
             }
             catch { }
         }
@@ -1905,7 +2072,7 @@ namespace NukeStats
         void Update() { PeriodicTick(); }   // a no-op if this object never ticks
 
         // -------- player enumeration (humans only; SteamID filters out AI/unjoined) --------
-        static string Sid(Player p) { try { return p.SteamID.ToString(); } catch { return ""; } }
+        internal static string Sid(Player p) { try { return p.SteamID.ToString(); } catch { return ""; } }
         // internal shims for the patch classes (Sid/Humans are private by design)
 
         // PERF: FindObjectsOfType<Player> is expensive and Humans() is called many times
@@ -1914,7 +2081,7 @@ namespace NukeStats
         // scene scan runs once per frame instead of a dozen+ times.
         static List<Player> _humansCache;
         static float _humansCacheTime = -1f;
-        static List<Player> Humans()
+        internal static List<Player> Humans()
         {
             float now = Time.time;
             if (_humansCache != null && _humansCacheTime == now) return _humansCache;
@@ -1934,15 +2101,28 @@ namespace NukeStats
             }
             catch (Exception e) { Log?.LogError("Humans/playerLookup: " + e); }
             if (ok.Count == 0)
-                foreach (var p in UnityEngine.Object.FindObjectsOfType<Player>())
+            {
+                // 1.9.6 test 3: the scene scan at most once a second. With the registry empty (nobody on, or between
+                // missions) it ran every frame: 380 ms of every second on an empty test server, 2026-10-09.
+                float rt = Time.realtimeSinceStartup;
+                if (_humansScan == null || rt - _humansScanAt >= 1f)
                 {
-                    if (p == null) continue;
-                    string id = Sid(p);
-                    if (!string.IsNullOrEmpty(id) && id != "0") ok.Add(p);
+                    var scan = new List<Player>();
+                    foreach (var p in UnityEngine.Object.FindObjectsOfType<Player>())
+                    {
+                        if (p == null) continue;
+                        string id = Sid(p);
+                        if (!string.IsNullOrEmpty(id) && id != "0") scan.Add(p);
+                    }
+                    _humansScan = scan; _humansScanAt = rt;
                 }
+                foreach (var p in _humansScan) if (p != null) ok.Add(p);
+            }
             _humansCache = ok; _humansCacheTime = now;
             return ok;
         }
+        static List<Player> _humansScan;
+        static float _humansScanAt = -999f;
 
         static string Fac(Player p)
         {
@@ -2002,7 +2182,7 @@ namespace NukeStats
         // Use UnityEngine.Debug.Log so the line lands in Unity's -logFile
         // (/logs/console.log) which the external bot tails. (Console.WriteLine only
         // reaches process stdout, NOT the -logFile, so the bot wouldn't see it.)
-        static void Out(string json) => Debug.Log("[NOSTATS] " + json);
+        internal static void Out(string json) { Perf.Logged(json.Length + 10); Debug.Log("[NOSTATS] " + json); }   // 1.9.5: counted for the perf line
 
         internal static void EmitAll(string type)
         {
@@ -2132,171 +2312,41 @@ namespace NukeStats
             catch (Exception e) { Log?.LogError("PosTick: " + e); }
         }
 
-        // ======================= AI AIRCRAFT LIMITER =======================
-        // Performance precaution against AI over-spawning / clogging runways. Checked ~every 3s.
-        // It ONLY ever removes AI aircraft (ac.Player == null) -- a player is never touched.
-        //   A) per-side AI cap: each faction may have at most AiPerTeamCap (32) AI flying.
-        //   B) total cap: total aircraft (AI + players, all sides) must not exceed AiTotalCap (64);
-        //      when over, AI is removed from the side with the MOST aircraft (never a player).
-        //   C) stuck: a GROUNDED AI that hasn't moved > AiStuckRadius for AiStuckSeconds (45s) is
-        //      cleared, to free a clogged runway. Independent of the caps.
-        // Removal = Aircraft.DisableUnit() (the game's own destroy path -> explode + despawn, synced
-        // to clients), falling back to ejection if that ever throws. A per-tick budget smooths the ramp.
-        // CRITICAL (1.1.19): never DisableUnit an already-disabled wreck. Aircraft.ServerDisableUnit
-        // always calls ReportKilled (unless landed at airbase) even when already disabled, and
-        // damageCredit is NOT cleared — so re-DisableUnit re-pays PlayerScore + re-fires KF.
-        // Wrecks also linger ~30s in FindObjectsOfType; counting them toward caps made the limiter
-        // prefer lowest-alt wrecks every 5s tick → same kill credited ~5× (reed 2026-07-26).
-        const int AiMaxRemovalsPerTick = 12;
+        // ======================= TEAM PANEL AIRCRAFT COUNT =======================
+        // 1.9.5: this was the AI aircraft limiter (per-side cap, total cap, stuck-on-the-ground clear). The owner
+        // removed it on 2026-10-06 (the mission files cap the AI; it was off on both servers). What is left is the
+        // 5 s count behind the webcc Team panel: the "air" frame with each side's aircraft, hangars and helipads.
         static float _nextAiTick;
-        sealed class AiTrack { public Vector3 anchor; public float since; }
-        static readonly Dictionary<int, AiTrack> _aiStuck = new Dictionary<int, AiTrack>();
 
-        static Vector3 AcPos(Aircraft ac) { try { var g = ac.GlobalPosition(); return new Vector3(g.x, g.y, g.z); } catch { return Vector3.zero; } }
-        static float AcAlt(Aircraft ac) { try { return ac.GlobalPosition().y; } catch { return 99999f; } }
         static bool IsGrounded(Aircraft ac) { try { return ac.IsLanded(); } catch { return false; } }
         static bool IsDisabled(Aircraft ac) { try { return ac != null && ac.disabled; } catch { return true; } }
 
-        // Wipe Unit.damageCredit before AiLimit DisableUnit. ServerDisableUnit always calls
-        // ReportKilled; with uncleared credit a *first* cull of a live damaged AI still pays
-        // PlayerScore once (1.1.19 only stopped re-pay on already-disabled wrecks).
-        static void ClearDamageCredit(Unit u)
+        internal static void AirPanelTick()
         {
-            try
-            {
-                if (u == null) return;
-                if (_dmgCreditFI == null)
-                    _dmgCreditFI = typeof(Unit).GetField("damageCredit", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                object dcRaw = _dmgCreditFI?.GetValue(u);
-                if (dcRaw is System.Collections.IDictionary dc) dc.Clear();
-            }
-            catch { }
-        }
-
-        internal static void AiLimitTick()
-        {
-            // The AI-limiter switch must NOT also switch off the WebCC Team data panel. This tick is the
-            // only producer of the "air" telemetry frame (per-side aircraft, score, hangars, helipads),
-            // so returning early here used to blank that whole panel the moment an operator turned
-            // enforcement off - a legitimate thing to do, since the caps sit well above what the mission
-            // files set. When disabled we still gather and still emit; we simply never cull.
-            bool enforce = AiLimit != null && AiLimit.Value;
             float now = Time.time;
             if (now < _nextAiTick) return;
-            _nextAiTick = now + 5f;   // 5s (was 3s): with mission AI caps now below the 32 limiter cap the
-                                      // limiter rarely acts, so this full-scene FindObjectsOfType<Aircraft>
-                                      // scan can run less often - fewer frame hitches + less GC. The 45s
-                                      // stuck-runway timer means 5s reaction granularity is still fine.
+            _nextAiTick = now + 5f;
             try
             {
                 var sides   = new Dictionary<FactionHQ, List<Aircraft>>();   // every LIVE aircraft, per side
                 var aiSides = new Dictionary<FactionHQ, List<Aircraft>>();   // live AI only, per side
-                var live = new HashSet<int>();
-                foreach (var ac in UnityEngine.Object.FindObjectsOfType<Aircraft>())
+                foreach (var ac in new List<Aircraft>(UnitRegistry.allAircraft))   // 1.9.5: the game's list, not a scene search
                 {
-                    if (ac == null || IsDisabled(ac)) continue;              // skip wrecks (still in scene ~30s)
+                    if (ac == null || IsDisabled(ac)) continue;              // skip wrecks
                     FactionHQ hq = null; try { hq = ac.NetworkHQ; } catch { }
                     if (hq == null) continue;
                     Player pl = null; try { pl = ac.Player; } catch { }
                     if (!sides.TryGetValue(hq, out var L)) { sides[hq] = L = new List<Aircraft>(); aiSides[hq] = new List<Aircraft>(); }
                     L.Add(ac);
-                    if (pl == null)                                          // AI aircraft (no human pilot)
-                    {
-                        aiSides[hq].Add(ac);
-                        int id = ac.GetInstanceID(); live.Add(id);
-                        Vector3 pos = AcPos(ac);
-                        float r = AiStuckRadius.Value;
-                        if (!_aiStuck.TryGetValue(id, out var t)) _aiStuck[id] = new AiTrack { anchor = pos, since = now };
-                        else if ((pos - t.anchor).sqrMagnitude > r * r) { t.anchor = pos; t.since = now; }
-                    }
+                    if (pl == null) aiSides[hq].Add(ac);                     // AI aircraft (no human pilot)
                 }
-                if (_aiStuck.Count > 0)                                      // forget aircraft that no longer exist
-                {
-                    var goneIds = new List<int>();
-                    foreach (var k in _aiStuck.Keys) if (!live.Contains(k)) goneIds.Add(k);
-                    foreach (var k in goneIds) _aiStuck.Remove(k);
-                }
-
-                var removed = new HashSet<Aircraft>();
-                int budget = AiMaxRemovalsPerTick;
-                void Remove(Aircraft ac, string why)
-                {
-                    if (ac == null || budget <= 0 || removed.Contains(ac)) return;
-                    if (ac.Player != null) return;                          // SAFETY: never remove a player's aircraft
-                    if (IsDisabled(ac)) return;                             // SAFETY: never re-DisableUnit a wreck (re-pays score)
-                    removed.Add(ac); budget--;
-                    ClearDamageCredit(ac);                                  // 1.1.20: first cull must not pay PlayerScore
-                    try { ac.DisableUnit(); }
-                    catch (Exception e) { try { ac.StartEjectionSequence(); } catch { } Log?.LogWarning("[ailimit] DisableUnit fell back to eject: " + e.Message); }
-                    Log?.LogInfo("[ailimit] cleared AI aircraft (" + why + ")");
-                }
-                IEnumerable<Aircraft> Removable(List<Aircraft> ai, int n) =>
-                    ai.Where(a => a != null && a.Player == null && !IsDisabled(a) && !removed.Contains(a)).OrderBy(AcAlt).Take(n);
-
-                if (!enforce)
-                {
-                    // Enforcement off: telemetry only. `removed` stays empty, so the panel reports every
-                    // live aircraft and nothing is ever culled.
-                    EmitAir(sides, aiSides, removed);
-                    return;
-                }
-
-                // RULE C: stuck grounded AI (independent of the caps)
-                int stuckSec = AiStuckSeconds.Value;
-                if (stuckSec > 0)
-                    foreach (var ai in aiSides.Values)
-                        foreach (var ac in ai)
-                        {
-                            if (ac == null || removed.Contains(ac)) continue;
-                            int id = ac.GetInstanceID();
-                            if (_aiStuck.TryGetValue(id, out var t) && now - t.since >= stuckSec && IsGrounded(ac))
-                            { Remove(ac, "stuck " + stuckSec + "s on the ground"); _aiStuck.Remove(id); }
-                        }
-
-                // RULE A: per-side AI cap
-                int perCap = AiPerTeamCap.Value;
-                if (perCap > 0)
-                    foreach (var kv in aiSides)
-                    {
-                        int n = kv.Value.Count(a => a != null && !removed.Contains(a)) - perCap;
-                        if (n > 0) foreach (var ac in Removable(kv.Value, n)) Remove(ac, "team AI cap " + perCap);
-                    }
-
-                // RULE B: total aircraft cap -> trim AI from the busiest side (never a player)
-                int totalCap = AiTotalCap.Value;
-                if (totalCap > 0)
-                {
-                    int Eff(FactionHQ h) => sides[h].Count(a => a != null && !removed.Contains(a));
-                    int total = 0; foreach (var h in sides.Keys) total += Eff(h);
-                    while (total > totalCap && budget > 0)
-                    {
-                        FactionHQ busiest = null; int best = -1;
-                        foreach (var h in sides.Keys)
-                        {
-                            if (!aiSides[h].Any(a => a != null && a.Player == null && !removed.Contains(a))) continue;
-                            int e = Eff(h);
-                            if (e > best) { best = e; busiest = h; }
-                        }
-                        if (busiest == null) break;                         // no removable AI anywhere
-                        var victim = Removable(aiSides[busiest], 1).FirstOrDefault();
-                        if (victim == null) break;
-                        Remove(victim, "total cap " + totalCap);
-                        total--;
-                    }
-                }
-
-                EmitAir(sides, aiSides, removed);
-                // Bot mute window: USE_PLUGIN_SCORE must not bank PlayerScore climbs from culls.
-                if (removed.Count > 0)
-                    Out("{\"t\":\"ailimit\",\"n\":" + removed.Count + "}");
-                // Entity feed moved to MapEntTick (~1s) so the live map stays responsive even when
-                // AiLimit is off / the 5s limiter scan is idle.
+                EmitAir(sides, aiSides, new HashSet<Aircraft>());
             }
-            catch (Exception e) { Log?.LogError("AiLimitTick: " + e); }
+            catch (Exception e) { Log?.LogError("AirPanelTick: " + e); }
         }
 
         // -------- live map entity feed (~1s): AI aircraft + ships with world pos + heading.
-        // Independent of AiLimit so the map still gets ships/AI when the limiter is disabled. --------
+        // Reads the game's own unit lists (1.9.5), so it costs almost nothing. --------
         static float _nextMapEnt;
         internal static void MapEntTick()
         {
@@ -2306,7 +2356,9 @@ namespace NukeStats
             try
             {
                 var sides = new Dictionary<FactionHQ, List<Aircraft>>();
-                foreach (var ac in UnityEngine.Object.FindObjectsOfType<Aircraft>())
+                // 1.9.5: the game's own list of live aircraft (UnitRegistry) instead of FindObjectsOfType, which searched
+                // the whole scene and cost ~14 ms in one frame every second. Disabled ones were skipped anyway.
+                foreach (var ac in new List<Aircraft>(UnitRegistry.allAircraft))
                 {
                     if (ac == null) continue;
                     FactionHQ hq = null; try { hq = ac.NetworkHQ; } catch { }
@@ -2358,11 +2410,11 @@ namespace NukeStats
                 }
                 sb.Append("],\"s\":[");
                 first = true;
-                foreach (var sh in UnityEngine.Object.FindObjectsOfType<Ship>())
+                foreach (var u in new List<Unit>(UnitRegistry.allUnits))     // 1.9.5: the game's unit list, not a scene search
                 {
                     try
                     {
-                        if (sh == null) continue;
+                        if (!(u is Ship sh) || sh == null) continue;
                         try { if (sh.disabled) continue; } catch { }          // skip mid-despawn ghosts
                         FactionHQ hq = null; try { hq = sh.NetworkHQ; } catch { }
                         if (hq == null) continue;                             // skip ships with no side
@@ -2444,7 +2496,7 @@ namespace NukeStats
             {
                 try
                 {
-                    foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+                    foreach (var hq in AllHQs())
                     {
                         if (hq == null || hq.faction == null) continue;
                         if (!sides.ContainsKey(hq))
@@ -2483,7 +2535,7 @@ namespace NukeStats
                       .Append('}');
                 }
                 sb.Append("],\"ai\":").Append(totAi).Append(",\"pl\":").Append(totPl)
-                  .Append(",\"teamcap\":").Append(AiPerTeamCap.Value).Append(",\"totcap\":").Append(AiTotalCap.Value).Append('}');
+                  .Append('}');
                 Out(sb.ToString());
             }
             catch (Exception e) { Log?.LogError("EmitAir: " + e); }
@@ -2495,7 +2547,7 @@ namespace NukeStats
         {
             try
             {
-                foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+                foreach (var hq in AllHQs())
                     if (hq != null && hq != target) return hq;
             }
             catch { }
@@ -2565,7 +2617,7 @@ namespace NukeStats
         // so there is now exactly one.
         //   topKey == null && dmgTotal > 0  =>  credit existed but the best of it was noise (FLOORED)
         //   topKey == null && dmgTotal == 0 =>  no credit at all (a genuine crash / terrain / fire)
-        static bool TopDamager(Unit dead, out object topKey, out float top, out float dmgTotal)
+        internal static bool TopDamager(Unit dead, out object topKey, out float top, out float dmgTotal)
         {
             topKey = null; top = 0f; dmgTotal = 0f;
             if (_dmgCreditFI == null)
@@ -2575,12 +2627,12 @@ namespace NukeStats
             {
                 PersistentID topId = default; bool haveTop = false;
                 foreach (var e in dcT)
-                { dmgTotal += e.Value; if (e.Value > top) { top = e.Value; topId = e.Key; haveTop = true; } }
+                { dmgTotal += e.Value; if (e.Value >= top) { top = e.Value; topId = e.Key; haveTop = true; } }   // >= : last max wins, same as the game (Unit.ReportKilled)
                 if (haveTop) topKey = topId;
             }
             else if (dcRaw is System.Collections.IDictionary dc)
                 foreach (System.Collections.DictionaryEntry e in dc)
-                { float v; try { v = Convert.ToSingle(e.Value); } catch { continue; } dmgTotal += v; if (v > top) { top = v; topKey = e.Key; } }
+                { float v; try { v = Convert.ToSingle(e.Value); } catch { continue; } dmgTotal += v; if (v >= top) { top = v; topKey = e.Key; } }
 
             if (topKey != null && top < CreditNoiseFloor) { topKey = null; top = 0f; return false; }
             return topKey != null;
@@ -2951,7 +3003,7 @@ namespace NukeStats
 
         /// <summary>True when this pilot already ejected from the given airframe, so its destruction is
         /// the empty hull despawning rather than a death.</summary>
-        static bool BailedFrom(string sid, int acId)
+        internal static bool BailedFrom(string sid, int acId)
         {
             try
             {
@@ -3098,7 +3150,7 @@ namespace NukeStats
             try
             {
                 string pala = null, bdf = null, palaChat = null, bdfChat = null;
-                foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+                foreach (var hq in AllHQs())
                 {
                     if (hq == null || hq.faction == null) continue;
                     string f = (hq.faction.factionName ?? "").ToLowerInvariant();
@@ -3122,7 +3174,19 @@ namespace NukeStats
         // A usable resolved persona: not empty, not the game's no-steam fallback ("Player"),
         // not the unresolved sentinel ("ID: <steam64>").
         static bool IsResolved(string n)
-            => !string.IsNullOrEmpty(n) && n != "Player" && !n.StartsWith("ID: ", StringComparison.Ordinal);
+            => !string.IsNullOrEmpty(n) && n != "Player" && !n.StartsWith("ID: ", StringComparison.Ordinal)
+               && !_placeholderRe.IsMatch(n ?? "");
+
+        // Owner 2026-09-04: never SHOW the game's "ID: <steam64>" sentinel. Some accounts have their
+        // own ID as their Steam persona, so no lookup can ever resolve them and the sentinel is the
+        // end of the chain. Render a readable, stable stand-in instead - last four digits so two
+        // unnamed players stay apart. Deliberately NOT cached into RawNames: the plugin keeps asking
+        // Steam, and the bot refuses to store this shape (see _storable_name) so it cannot poison
+        // the rank file the way a stored placeholder did on 2026-07-31.
+        static readonly System.Text.RegularExpressions.Regex _placeholderRe =
+            new System.Text.RegularExpressions.Regex(@"^Pilot \d{4}$");
+        internal static string PlaceholderName(string sid)
+            => string.IsNullOrEmpty(sid) || sid.Length < 4 ? "Pilot" : "Pilot " + sid.Substring(sid.Length - 4);
 
         // The player's REAL name on the new pipeline. Player.PlayerName no longer exists; each
         // process resolves names itself via GetPlayerName() (cache -> Steam, throttled request
@@ -3262,7 +3326,7 @@ namespace NukeStats
                     }
                     MaybeWebNameLookup(sid);   // 1.1.38: about to show the placeholder -> ask Steam now
                 }
-                return "ID: " + sid;
+                return PlaceholderName(sid);
             }
             catch { return "?"; }
         }
@@ -3270,7 +3334,7 @@ namespace NukeStats
         // User-facing display name for plugin-composed chat/broadcast lines: "[TAG] Name" while
         // Chat.CustomChat is ON (rank now lives ONLY in plugin-composed strings), plain raw name
         // otherwise (pure-vanilla lever). Telemetry "n" fields stay RAW - the bot owns webcc rank.
-        static string RankedName(Player p)
+        internal static string RankedName(Player p)
         {
             // 1.4.5: every consumer interpolates this straight into rich-text broadcast/tell lines,
             // and the raw name can be a rank-file NameFallback - a PLAYER-chosen Steam persona the
@@ -3416,7 +3480,7 @@ namespace NukeStats
             catch { return false; }                        // never let a scoring hiccup break balancing
         }
 
-        static void Award(Player p, int pts, string reason)
+        internal static void Award(Player p, int pts, string reason)
         {
             if (p == null || pts == 0) return;
             string id = Sid(p);
@@ -3737,7 +3801,7 @@ namespace NukeStats
         // Moderation tab, recording WHAT caused the eject/kick/ban (the teammate killed + the offense count).
         // ts=0 -> the bot stamps the real time on ingest.
         static void EmitTkMod(string sid, Player p, string action, int count, TkEvent ev, string nc = "",
-                              List<KillRec> units = null)
+                              List<KillRec> units = null, bool watch = false)
         {
             string nm = p != null ? RawNameOf(p) : sid;
             string victim = !string.IsNullOrEmpty(ev.victim) ? ev.victim : "a teammate";
@@ -3775,7 +3839,8 @@ namespace NukeStats
                 + "\",\"munition\":\"" + Esc(ev.munition ?? "") + "\",\"count\":" + count
                 + ",\"dmg\":" + ev.dmg.ToString("0", System.Globalization.CultureInfo.InvariantCulture)
                 + ",\"action\":\"" + action + "\",\"nc\":\"" + Esc(nc ?? "")
-                + "\",\"ts\":" + ts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + ujson + "}");
+                + "\",\"ts\":" + ts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + ujson
+                + (watch ? ",\"watch\":1" : "") + "}");   // 1.9.4: watch-list kick (the bot words the log line)
         }
 
         // ---- collateral kill window + munition launch tracking (ported from 0.9.46) ----
@@ -4297,6 +4362,10 @@ namespace NukeStats
                 {
                     string sid = ev.sid;
                     int n = (_tkCount.TryGetValue(sid, out var c) ? c : 0) + 1;
+                    // 1.9.4 watch list (TkWatch.cs): a listed player's first teamkill of the match skips the eject
+                    // warning and goes straight to the kick, so the next one is the ban
+                    bool watch = n == 1 && TkWatch.IsListed(sid);
+                    if (watch) n = 2;
                     _tkCount[sid] = n;
                     var p = FindPlayerBySid(sid);
                     if (n == 1)
@@ -4312,10 +4381,17 @@ namespace NukeStats
                     else if (n == 2)
                     {
                         _tkRankZero.Add(sid);
-                        if (p != null) Instance?.TellPlayer(p, "<color=#FF5555>FRIENDLY FIRE - KICKED</color> <color=#FFD200>(2nd offense). Rank resets to 0 on rejoin. Next is a BAN.</color>");
-                        _tkKicks.Add(new KeyValuePair<string, float>(sid, now + 2.5f));   // let the message land, then kick
-                        EmitTkMod(sid, p, "kick", n, ev);
-                        Log?.LogInfo($"[tk] kick {sid} (2)");
+                        if (watch)
+                        {
+                            _tkKicks.Add(new KeyValuePair<string, float>(sid, now));   // no message: they are removed at once and could not read it
+                        }
+                        else
+                        {
+                            if (p != null) Instance?.TellPlayer(p, "<color=#FF5555>FRIENDLY FIRE - KICKED</color> <color=#FFD200>(2nd offense). Rank resets to 0 on rejoin. Next is a BAN.</color>");
+                            _tkKicks.Add(new KeyValuePair<string, float>(sid, now + 2.5f));   // let the message land, then kick
+                        }
+                        EmitTkMod(sid, p, "kick", n, ev, watch: watch);
+                        Log?.LogInfo(watch ? $"[tk] kick {sid} (watch list, first teamkill this match)" : $"[tk] kick {sid} (2)");
                     }
                     else
                     {
@@ -4967,7 +5043,7 @@ namespace NukeStats
             catch (Exception e) { Log?.LogError("OnPlayerSpawned: " + e); }
         }
 
-        void BroadcastAll(string msg)
+        internal void BroadcastAll(string msg)
         {
             // 1.1.30: `Cm ?? (...)` kept a DESTROYED (fake-null) ref forever; ResolveChatManager re-resolves.
             try { var cm = ResolveChatManager(); if (cm != null) cm.RpcServerMessage(msg, false); }
@@ -5065,7 +5141,7 @@ namespace NukeStats
 
         // ---- admin auth for the IN-GAME commands (config; the user named this SteamID) ----
         internal static ConfigEntry<string> AdminSteamIds;
-        static bool IsAdmin(Player p)
+        internal static bool IsAdmin(Player p)   // 1.9.1: internal (PingKick exempts admins)
         {
             try
             {
@@ -5101,11 +5177,28 @@ namespace NukeStats
         // even on the BUILT-IN missions, which can expose more than two FactionHQs (the old "grab the
         // first two" version mis-detected those and silently disabled balancing). < 2 joinable sides =
         // co-op / not-a-PvP-match -> not balanceable.
-        static bool TwoSides(out FactionHQ a, out FactionHQ b)
+        // 1.9.5: the game's own faction HQ list (FactionRegistry, which the game's AI spawner also reads) instead of
+        // FindObjectsOfType<FactionHQ>, which searched the whole scene: on a co-op mission the ping kicker's PvP check and
+        // Annihilate each did it every second (~11 and ~20 ms of one frame on S2). Same order as the old search (instance
+        // id); falls back to the search if the registry is ever empty.
+        internal static List<FactionHQ> AllHQs()
+        {
+            var list = new List<FactionHQ>();
+            try { foreach (var hq in FactionRegistry.GetAllHQs()) if (hq != null) list.Add(hq); }
+            catch { list.Clear(); }
+            if (list.Count == 0)
+            {
+                try { list.AddRange(UnityEngine.Object.FindObjectsOfType<FactionHQ>()); } catch { }
+            }
+            else list.Sort((x, y) => x.GetInstanceID().CompareTo(y.GetInstanceID()));
+            return list;
+        }
+
+        internal static bool TwoSides(out FactionHQ a, out FactionHQ b)
         {
             a = null; b = null;
             var joinable = new List<FactionHQ>();
-            foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+            foreach (var hq in AllHQs())
                 if (hq != null && hq.faction != null && !hq.preventJoin) joinable.Add(hq);
             if (joinable.Count < 2) return false;
             if (joinable.Count > 2)                                   // rare: pick the two most-populated teams
@@ -5139,7 +5232,7 @@ namespace NukeStats
         {
             if (string.IsNullOrWhiteSpace(key)) return null;
             key = key.Trim().ToLowerInvariant();
-            foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+            foreach (var hq in AllHQs())
             {
                 if (hq == null || hq.faction == null) continue;
                 string fn = (hq.faction.factionName ?? "").ToLowerInvariant();
@@ -5152,7 +5245,7 @@ namespace NukeStats
         }
 
         // live humans on a side (skips ghosts from mid-disconnect)
-        static List<Player> Side(FactionHQ hq)
+        internal static List<Player> Side(FactionHQ hq)
         {
             var list = new List<Player>();
             if (hq == null) return list;
@@ -5414,6 +5507,7 @@ namespace NukeStats
         static float _lastTimeoutCheck = -999f;
         static float _timeoutLevelMark = -1f;   // timeSinceLevelLoad at the last tick: detects a level load
         static bool _timeoutResolved = false;   // this match's timeout result has already been announced
+        static float _timeoutPrevMax = -1f;    // 1.8.5 audit: MaxTime at the last tick - a DROP into the lead window is a forced cut
         internal static void PvETimeoutTick()
         {
             try
@@ -5425,7 +5519,7 @@ namespace NukeStats
                 // A LEVEL LOAD IS A NEW MATCH - re-arm the once-per-match latch below. Same idiom as
                 // LimboWatchTick: timeSinceLevelLoad running BACKWARDS is the level-load signal.
                 float tsl = Time.timeSinceLevelLoad;
-                if (_timeoutLevelMark < 0f || tsl < _timeoutLevelMark) _timeoutResolved = false;
+                if (_timeoutLevelMark < 0f || tsl < _timeoutLevelMark) { _timeoutResolved = false; _timeoutPrevMax = -1f; }
                 _timeoutLevelMark = tsl;
 
                 // THE SPAM GUARD. The gameResolution check below is NOT sufficient on its own: ForceDraw
@@ -5443,12 +5537,24 @@ namespace NukeStats
                 float maxTime = CurrentMissionMaxTime();
                 if (maxTime <= 0f) return;
                 int lead = TimeoutLeadSeconds != null ? Mathf.Max(0, TimeoutLeadSeconds.Value) : 120;
+                // 1.8.5 audit (S2 19:37 today: "VICTORY! Primeva wins" + 500/250/100 one second after an admin map
+                // change - "HUH?!"): the bot's / an admin's set-time-remaining rewrites CurrentMissionOption.MaxTime
+                // to tsl+10, which lands INSIDE the lead window, and this tick resolved the cut as a timer expiry -
+                // a false AI victory (PvE) or a false score win (PvP), placement points paid. A natural expiry
+                // never LOWERS MaxTime, so a drop into the window is a forced cut: latch and declare nothing.
+                float prevMax = _timeoutPrevMax; _timeoutPrevMax = maxTime;
+                if (prevMax > 0f && maxTime < prevMax - 1.5f && maxTime - tsl < lead)
+                {
+                    _timeoutResolved = true;
+                    Log?.LogInfo($"[timeout] MaxTime dropped {prevMax:F0}s -> {maxTime:F0}s at {tsl:F0}s (forced cut) - no result declared.");
+                    return;
+                }
                 if (Time.timeSinceLevelLoad <= maxTime - lead) return;   // not within the lead window yet
 
                 // Enumerate ALL HQs (the AI side has preventJoin==true, which TwoSides() hides).
                 FactionHQ aiHQ = null;
                 int human = 0, ai = 0;
-                foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+                foreach (var hq in AllHQs())
                 {
                     if (hq == null || hq.faction == null) continue;
                     if (hq.preventJoin) { ai++; aiHQ = hq; }         // AI-only side
@@ -5949,6 +6055,25 @@ namespace NukeStats
             return false;
         }
 
+        // Mission-prefix exclusions (Annihilate.ExcludeMissions).
+        static bool AnnihilateExcludedHere()
+        {
+            try
+            {
+                string raw = AnnihilateExcludeMissions != null ? (AnnihilateExcludeMissions.Value ?? "") : "";
+                if (raw.Trim().Length == 0) return false;
+                string name = null;
+                try { name = MissionManager.CurrentMission != null ? MissionManager.CurrentMission.Name : null; } catch { }
+                if (string.IsNullOrEmpty(name)) return false;
+                foreach (var part in raw.Split(','))
+                {
+                    var p = part.Trim();
+                    if (p.Length > 0 && name.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
         internal static void AnnihilateTick()
         {
             try
@@ -5959,6 +6084,7 @@ namespace NukeStats
                 Trace("AnnihilateTick");
 
                 if (AnnihilateEnabled == null || !AnnihilateEnabled.Value) { _annihilateSince.Clear(); return; }
+                if (AnnihilateExcludedHere()) { _annihilateSince.Clear(); return; }
                 if (GameManager.gameResolution != GameResolution.Ongoing) { _annihilateSince.Clear(); return; }
 
                 // Mission restart: level-load clock jumped backwards
@@ -5983,7 +6109,7 @@ namespace NukeStats
                 {
                     // Multi-HQ: all joinable human sides + at most one AI (preventJoin) HQ.
                     FactionHQ aiHq = null;
-                    foreach (var hq in UnityEngine.Object.FindObjectsOfType<FactionHQ>())
+                    foreach (var hq in AllHQs())
                     {
                         if (hq == null || hq.faction == null) continue;
                         if (hq.preventJoin)
@@ -6007,7 +6133,7 @@ namespace NukeStats
                 foreach (var hq in sides) planeCount[hq] = 0;
                 try
                 {
-                    foreach (var ac in UnityEngine.Object.FindObjectsOfType<Aircraft>())
+                    foreach (var ac in new List<Aircraft>(UnitRegistry.allAircraft))   // 1.9.5: the game's list, not a scene search
                     {
                         if (ac == null) continue;
                         try { if (ac.disabled) continue; } catch { }
@@ -6144,7 +6270,7 @@ namespace NukeStats
         // End a PvP match as a DRAW. Prefer a real Draw/Tie/Stalemate EndType if the game has one.
         // NEVER fall back to Defeat — that crowns the OTHER side Victory. If no Draw EndType exists:
         // emit a plugin draw frame and skip DeclareEndGame (caller already announced; rotation handles).
-        static void ForceDraw(FactionHQ a, FactionHQ b)
+        internal static void ForceDraw(FactionHQ a, FactionHQ b)
         {
             try
             {
@@ -6165,6 +6291,7 @@ namespace NukeStats
                     }
                 }
                 // No Draw EndType — do NOT use Defeat. Chat announce is already done by the caller.
+                _timeoutResolved = true;   // 1.8.5 audit: a declared draw is final - the timeout tick must not crown a native-score winner after it
                 EmitDrawFrame();
                 Log?.LogInfo("[draw] no Draw/Tie/Stalemate EndType — emitted plugin draw frame, skipped DeclareEndGame (no false Victory/Defeat crown)");
             }
@@ -7079,7 +7206,7 @@ namespace NukeStats
         }
 
         // Declare `winner`'s faction the victor -> ends the match (same call the PvE timeout uses).
-        static void ForceVictory(FactionHQ winner)
+        internal static void ForceVictory(FactionHQ winner)
         {
             try
             {
@@ -7214,10 +7341,14 @@ namespace NukeStats
         // ================= end force-move / auto-balance =================
 
         // -------- chat reformat --------
+        static long _rankStatNext;   // 1.9.5: the file is looked at most once a second (many callers run per chat line, kill and name)
         static void LoadRankMap()
         {
             try
             {
+                long statNow = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (statNow < _rankStatNext) return;
+                _rankStatNext = statNow + System.Diagnostics.Stopwatch.Frequency;
                 var fi = new FileInfo(RankFilePath);
                 if (!fi.Exists || fi.LastWriteTimeUtc.Ticks == _rankFileTicks) return;
                 _rankFileTicks = fi.LastWriteTimeUtc.Ticks;
@@ -7246,6 +7377,7 @@ namespace NukeStats
                         }
                     }
                 }
+                Perf.RankMapLoaded(System.Diagnostics.Stopwatch.GetTimestamp() - statNow);
             }
             catch (Exception e) { Log?.LogError("LoadRankMap: " + e); }
         }
@@ -7424,7 +7556,7 @@ namespace NukeStats
         }
 
         // -------- string helpers --------
-        static string SafeText(string s)   // for raw-rendered server messages: strip markup + control chars
+        internal static string SafeText(string s)   // for raw-rendered server messages: strip markup + control chars
         {
             if (string.IsNullOrEmpty(s)) return "";
             var sb = new StringBuilder(s.Length);
@@ -7443,7 +7575,7 @@ namespace NukeStats
             return sb.ToString();
         }
         static string Num(object o) { try { return Convert.ToString(o, CultureInfo.InvariantCulture) ?? "0"; } catch { return "0"; } }
-        static string Esc(string s)        // JSON string escaping
+        internal static string Esc(string s)        // JSON string escaping
         {
             if (string.IsNullOrEmpty(s)) return "";
             var sb = new StringBuilder(s.Length + 8);

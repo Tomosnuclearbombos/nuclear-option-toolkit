@@ -55,8 +55,11 @@ def check(html: str) -> list[str]:
             errs.append("tDraw missing — must be now−MAP_DELAY_S every RAF")
         if not re.search(r"WEBCC_BUILD\s*=\s*['\"]map-delay-v7", html):
             errs.append("WEBCC_BUILD map-delay-v7 stamp missing (cache-bust marker)")
-        if not re.search(r"MAP_DELAY_S\s*=\s*2(?:\.0+)?\s*;", html):
-            errs.append("MAP_DELAY_S must be exactly 2.0 (pure delayed playback)")
+        # 1.9.0: the delay must EXCEED the plugin's 2 s position cadence or the lerp buffer starves (3.0, and
+        # 4.0 while the NOBlackBox feed is live)
+        _md = re.search(r"\bMAP_DELAY_S\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;", html)
+        if not _md or float(_md.group(1)) <= 2.0:
+            errs.append("MAP_DELAY_S must be set above 2.0 s (the plugin's position cadence)")
         if not re.search(r"\bfunction\s+_ingestTrail\s*\(", html):
             errs.append("_ingestTrail missing — v7 needs bot pos_trail ingest")
         if not re.search(r"\bMAP_COAST_S\b", html):

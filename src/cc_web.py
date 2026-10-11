@@ -371,9 +371,9 @@ def _deploy_status():
     """Describe the plugin update (if any) STAGED for the next deploy, so the web CC can show
     'update good to go' at a glance. Reads pending_plugin.dll (+ its .json sidecar) and compares
     its sha to deployed_plugin.sha256. `new` => something genuinely different from what's live."""
-    out = {"staged": False}
+    out = {"staged": False, "ready": False}
     try:                                                  # the LIVE deployed version (recorded at deploy time)
-        with open(DEPLOYED_META, encoding="utf-8") as f:
+        with open(DEPLOYED_META, encoding="utf-8-sig") as f:
             dm = json.load(f)
         out["deployed_version"] = dm.get("version")
         out["deployed_at"] = dm.get("deployed_at")
@@ -388,7 +388,7 @@ def _deploy_status():
             for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
         sha = h.hexdigest()
-        out.update({"staged": True, "size": os.path.getsize(PENDING_DLL), "sha": sha[:12]})
+        out.update({"staged": True, "size": os.path.getsize(PENDING_DLL), "sha": sha[:12], "sha256": sha})
         try:                                              # optional human-readable metadata
             # utf-8-sig: a sidecar staged from PowerShell 5.1 (Set-Content/Out-File) carries a BOM
             # that plain utf-8 json.load rejects — the card then silently lost version/note/staged_at
@@ -399,20 +399,51 @@ def _deploy_status():
             out["version"] = meta.get("version")
             out["note"] = meta.get("note")
             out["staged_at"] = meta.get("staged_at")
-            out["meta_ok"] = (str(meta.get("sha256", ""))[:12] == sha[:12])   # sidecar matches the real DLL?
+            meta_sha = str(meta.get("sha256", "")).strip().lower()
+            out["meta_ok"] = bool(re.fullmatch(r"[0-9a-f]{64}", meta_sha)) and meta_sha == sha
+            if not out["meta_ok"]:
+                out["readiness_error"] = "Staged metadata does not match the full plugin SHA256."
+            elif not str(out.get("version") or "").strip():
+                out["readiness_error"] = "Staged metadata has no plugin version."
         except Exception:                                 # noqa: BLE001
             out["meta_ok"] = None
+            out["readiness_error"] = "Staged metadata is missing or unreadable."
         deployed = ""
         try:
             with open(DEPLOYED_SHA, encoding="utf-8") as f:
-                deployed = f.read().strip()
+                deployed = f.read().strip().lower()
         except Exception:                                 # noqa: BLE001
             pass
         out["deployed_sha"] = deployed[:12]
-        out["new"] = (not deployed) or deployed[:12] != sha[:12]   # differs from live -> a real update
+        out["deployed_sha256"] = deployed
+        out["new"] = (not deployed) or deployed != sha
+        out["ready"] = bool(out["new"] and out.get("meta_ok") is True and not out.get("readiness_error"))
     except Exception as e:                                # noqa: BLE001
         out["error"] = str(e)
     return out
+
+
+def _plugin_display_status(state=None):
+    """Keep bot-reported and recorded versions separate; neither silently overrides disagreement."""
+    if state is None:
+        try:
+            with open(DASHBOARD, encoding="utf-8-sig") as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+    state = state if isinstance(state, dict) else {}
+    observed = str(state.get("plugin_version") or "").strip()
+    recorded = _json_version(DEPLOYED_META).strip()
+    stale = bool(state.get("is_stale") or state.get("feed_lost"))
+    try:
+        age = time.time() - float(state.get("ts", 0))
+        stale = stale or not math.isfinite(age) or age < 0 or age > 60
+    except (TypeError, ValueError):
+        stale = True
+    return {"observed_version": observed or None, "deployed_version": recorded or None,
+            "version_mismatch": bool(observed and recorded and observed != recorded),
+            "observed_is_stale": stale,
+            "observed_source": "bot snapshot (load line or deployment record)"}
 
 app = Flask(__name__, static_folder=None)
 
@@ -1057,6 +1088,424 @@ def _ranks_table():
     return out
 
 
+# ── 1.9.4 (owner 2026-10-04): activity panel polish ───────────────────────────────────────────────────────────
+# Rank tags for player names in chat and join/leave lines, a much longer activity + console history (paged on
+# scroll-up), a timestamped console archive, and the NOBlackBox live-map follower.
+
+# -- rank tags for names --------------------------------------------------------------------------------------
+_ACT_TIME_RE = re.compile(r"^\d\d:\d\d:\d\d [AP]M\s\s")
+_ACT_NAME_RES = (("CHAT", re.compile(r"^\[CHAT\]\s+(.+?): ")),
+                 ("JOIN", re.compile(r"^\[JOIN\]\s+(.+?) joined\b")),
+                 ("LEFT", re.compile(r"^\[LEFT\]\s+(.+?) left\b")))
+_JOIN_RANK_RE = re.compile(r" joined\s+\(\[([^\]]+)\] ([^,]+),")
+_NAME_INDEX = {"key": None, "map": {}}               # ranks.json name -> sid (rebuilt when the ranks cache changes)
+_NAME_RANK_CACHE = {}                                # name -> (until, [label, colour, title] or None)
+
+
+def _act_line_name(line):
+    """(tag, player name) for a [CHAT]/[JOIN]/[LEFT] activity line, else (None, None)."""
+    body = _ACT_TIME_RE.sub("", str(line), count=1)
+    for tag, rx in _ACT_NAME_RES:
+        m = rx.match(body)
+        if m:
+            return tag, m.group(1).strip()
+    return None, None
+
+
+def _name_index():
+    d = _read_ranks()
+    if _NAME_INDEX["key"] is d:
+        return _NAME_INDEX["map"]
+    best = {}
+    for sid, r in d.items():
+        nm = str((r or {}).get("name") or "").strip()
+        if not nm:
+            continue
+        tp = float((r or {}).get("timePlayed", 0) or 0)
+        cur = best.get(nm)
+        if cur is None or tp > cur[1]:               # the same name on two accounts: the one that played most
+            best[nm] = (sid, tp)
+    _NAME_INDEX["key"], _NAME_INDEX["map"] = d, {k: v[0] for k, v in best.items()}
+    return _NAME_INDEX["map"]
+
+
+def _rank_full(sid):
+    """[label, colour, title] for a SteamID - the same ladder maths as _rank_tier (and the Players table)."""
+    _refresh_prestige()
+    _refresh_ladder()
+    RANKS = getattr(bot, "RANKS", [])
+    try:
+        _, title, abbr, color = RANKS[bot.rank_index_for(_cycle_for_tier(sid))]
+        try:
+            pn = int(bot.prestige_count(sid) or 0)
+        except Exception:                                # noqa: BLE001
+            pn = 0
+        try:
+            label = bot.prestige_label(abbr, title, pn)
+        except Exception:                                # noqa: BLE001
+            label = f"{abbr} - {pn}*" if pn > 0 else abbr
+        return [label, color, title]
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
+def _act_names(lines, live_players):
+    """{name: [label, colour, title]} for the players named in these lines. Online players use the live roster's
+    tag (exactly what the Players table shows); everyone else is looked up in ranks.json by name. A join line
+    whose player cannot be found falls back to the tag the line itself carries."""
+    out = {}
+    live = {}
+    for p in live_players or []:
+        if isinstance(p, dict) and p.get("name"):
+            live[str(p["name"])] = [p.get("rank_abbr") or "", p.get("rank_color") or "", p.get("rank_name") or ""]
+    now = time.time()
+    idx = None
+    for line in lines:
+        tag, nm = _act_line_name(line)
+        if not nm or nm in out:
+            continue
+        if nm in live and live[nm][0]:
+            out[nm] = live[nm]
+            continue
+        hit = _NAME_RANK_CACHE.get(nm)
+        if hit and hit[0] > now:
+            if hit[1]:
+                out[nm] = hit[1]
+            continue
+        if idx is None:
+            idx = _name_index()
+        sid = idx.get(nm)
+        val = _rank_full(sid) if sid else None
+        if val is None and tag == "JOIN":
+            m = _JOIN_RANK_RE.search(str(line))
+            if m:
+                abbr, title = m.group(1), m.group(2).strip()
+                col = next((r[3] for r in getattr(bot, "RANKS", []) if r[2] == abbr.split(" - ")[0]), "")
+                val = [abbr, col, title] if col else None
+        _NAME_RANK_CACHE[nm] = (now + 60.0, val)
+        if val:
+            out[nm] = val
+    if len(_NAME_RANK_CACHE) > 4000:
+        _NAME_RANK_CACHE.clear()
+    return out
+
+
+# -- log tails and history pages ------------------------------------------------------------------------------
+CONSOLE_ARCHIVE = os.path.join(HERE, "console_history.log")
+_ARCHIVE_MAX = 24_000_000                            # bytes; trimmed back to the newest _ARCHIVE_KEEP
+_ARCHIVE_KEEP = 16_000_000
+_DAY_TAG = "[DAY]"
+
+
+def _file_gen(path):
+    """Identity of a log file: changes when it is replaced (the bot's trim writes a new file)."""
+    try:
+        st = os.stat(path)
+        return f"{st.st_ino or 0}-{int(st.st_ctime)}"
+    except OSError:
+        return ""
+
+
+def _read_back(path, before, n, keep=None):
+    """Up to n non-empty lines that END at byte offset `before` (None = end of file), oldest first, as
+    [(offset, text)], plus the offset the page starts at. keep(text) -> bool filters lines (they still move the
+    page). Reads 256 KB blocks backwards, at most 8 MB per call."""
+    out = []
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            end = size if before is None else max(0, min(int(before), size))
+            pos, carry, read, boundary = end, b"", 0, end
+            while pos > 0 and len(out) < n and read < 8_000_000:
+                step = min(262144, pos)
+                pos -= step
+                f.seek(pos)
+                block = f.read(step) + carry
+                read += step
+                parts = block.split(b"\n")
+                if pos > 0:                              # parts[0] may be cut: it joins the next (earlier) block
+                    carry, body, off = parts[0], parts[1:], pos + len(parts[0]) + 1
+                else:
+                    carry, body, off = b"", parts, 0
+                boundary = min(off, end)                 # where the earliest whole line seen so far starts
+                found = []
+                for raw in body:
+                    if raw.strip():
+                        txt = raw.decode("utf-8", "replace").rstrip("\r")
+                        if keep is None or keep(txt):
+                            found.append((off, txt))
+                    off += len(raw) + 1
+                out = found + out
+            out = out[-n:]
+            start = out[0][0] if out else boundary       # nothing kept in 8 MB: the next page starts there
+            return out, start, size
+    except OSError:
+        return [], 0, 0
+
+
+def _tail_lines(path, n):
+    """The newest n non-empty lines with their byte offsets: [(offset, text)], plus the file size."""
+    lines, _, size = _read_back(path, None, n)
+    return lines, size
+
+
+# -- console archive ------------------------------------------------------------------------------------------
+def _stamp():
+    return time.strftime("%I:%M:%S %p")
+
+
+def _day_text(t=None):
+    lt = time.localtime(t)
+    return f"{time.strftime('%A', lt)} {lt.tm_mday} {time.strftime('%B %Y', lt)}"
+
+
+def _keep_tail_with_day(data, keep):
+    """The newest `keep` bytes of a log, cut at a line start, with the [DAY] line in force at the cut copied to the
+    top so the kept part still says which day its first lines belong to."""
+    if len(data) <= keep:
+        return data
+    cut = data.find(b"\n", len(data) - keep) + 1
+    if cut <= 0:
+        return data
+    kept = data[cut:]
+    first = kept.split(b"\n", 1)[0]
+    if b"  " + _DAY_TAG.encode() in first:
+        return kept
+    i = data.rfind(b"  " + _DAY_TAG.encode(), 0, cut)
+    if i < 0:
+        return kept
+    ls = data.rfind(b"\n", 0, i) + 1
+    le = data.find(b"\n", i)
+    return data[ls:le + 1] + kept
+
+
+class _ConsoleArchiver:
+    """Copies the console lines the panel shows (errors + the lines the noise filter keeps; never the [NOSTATS]
+    data frames) from console_mirror.log into console_history.log with the wall-clock time, plus a [DAY] line when
+    the date changes. The mirror holds only the last few thousand raw lines; this keeps days of the readable ones."""
+
+    def __init__(self):
+        self.off = None
+        self.rest = b""
+        self.day = None
+
+    def _resume(self):
+        """Pick up after the last archived line if it is still in the mirror, else at the mirror's end."""
+        try:
+            size = os.path.getsize(CONSOLE)
+        except OSError:
+            size = 0
+        self.off = size
+        last = None
+        for _, txt in _read_back(CONSOLE_ARCHIVE, None, 40)[0][::-1]:
+            body = _ACT_TIME_RE.sub("", txt, count=1)
+            if body.startswith(_DAY_TAG):
+                if self.day is None:
+                    self.day = body[len(_DAY_TAG):].strip()
+                continue
+            if last is None:
+                last = body
+        if last:
+            try:
+                with open(CONSOLE, "rb") as f:
+                    start = max(0, size - 4_000_000)
+                    f.seek(start)
+                    data = f.read()
+                i = data.rfind(("\n" + last + "\n").encode("utf-8"))
+                if i >= 0:
+                    self.off = start + i + len(last) + 2
+            except OSError:
+                pass
+
+    def step(self):
+        if self.off is None:
+            self._resume()
+        try:
+            size = os.path.getsize(CONSOLE)
+        except OSError:
+            return
+        if size < self.off:                              # the bot trimmed the mirror: carry on from its new end
+            self.off, self.rest = size, b""
+            return
+        if size == self.off:
+            return
+        with open(CONSOLE, "rb") as f:
+            f.seek(self.off)
+            data = f.read(min(size - self.off, 4_000_000))
+        self.off += len(data)
+        buf = self.rest + data
+        cut = buf.rfind(b"\n")
+        if cut < 0:
+            self.rest = buf
+            return
+        self.rest = buf[cut + 1:]
+        out = []
+        today = _day_text()
+        for raw in buf[:cut].split(b"\n"):
+            ln = raw.decode("utf-8", "replace").rstrip("\r")
+            if not ln.strip() or _classify(ln) not in ("show", "error"):
+                continue
+            if today != self.day:
+                self.day = today
+                out.append(f"{_stamp()}  {_DAY_TAG} {today}\n")
+            out.append(f"{_stamp()}  {ln}\n")
+        if out:
+            with open(CONSOLE_ARCHIVE, "a", encoding="utf-8") as f:
+                f.write("".join(out))
+            self._trim()
+
+    def _trim(self):
+        try:
+            if os.path.getsize(CONSOLE_ARCHIVE) <= _ARCHIVE_MAX:
+                return
+            with open(CONSOLE_ARCHIVE, "rb") as f:
+                data = f.read()
+            tmp = CONSOLE_ARCHIVE + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(_keep_tail_with_day(data, _ARCHIVE_KEEP))
+            os.replace(tmp, CONSOLE_ARCHIVE)
+        except OSError:
+            pass
+
+    def run(self):
+        while True:
+            try:
+                self.step()
+            except Exception:                            # noqa: BLE001 - the archive must never stop
+                pass
+            time.sleep(0.5)
+
+
+def _console_items(lines, user_filters):
+    """Archive lines -> panel items {t, k, ts}; [DAY] lines -> {k:'day'}. User 'filter messages like this'
+    patterns apply here (not when archiving), so removing a filter brings its lines back."""
+    out = []
+    for off, txt in lines:
+        ts = ""
+        m = _ACT_TIME_RE.match(txt)
+        body = txt
+        if m:
+            ts = txt[:11]
+            body = txt[m.end():]
+        if body.startswith(_DAY_TAG):
+            out.append({"t": body[len(_DAY_TAG):].strip(), "k": "day", "o": off})
+            continue
+        if user_filters and any(p in _norm_console(body) for p in user_filters):
+            continue
+        out.append({"t": body, "k": "err" if _classify(body) == "error" else "show", "ts": ts, "o": off})
+    return out
+
+
+def _console_keep(user_filters):
+    def keep(txt):
+        if not user_filters:
+            return True
+        body = _ACT_TIME_RE.sub("", txt, count=1)
+        return body.startswith(_DAY_TAG) or not any(p in _norm_console(body) for p in user_filters)
+    return keep
+
+
+@app.route("/api/loghist")
+def api_loghist():
+    """Older lines of the activity feed or the console, for the panel's scroll-up history.
+    log=activity|console, before=<byte offset the client's oldest line starts at>, gen=<file identity the
+    client paged from> (a mismatch = the file was replaced: the client starts its history again), n<=1000.
+    The console pages the timestamped archive; raw=1 pages the raw mirror instead."""
+    log = request.args.get("log", "activity")
+    raw = request.args.get("raw") == "1"
+    try:
+        before = int(request.args.get("before", ""))
+    except ValueError:
+        before = None
+    try:
+        n = max(1, min(1000, int(request.args.get("n", 500))))
+    except ValueError:
+        n = 500
+    if log == "console":
+        path = CONSOLE if raw else CONSOLE_ARCHIVE
+    else:
+        path = ACTIVITY
+    gen = _file_gen(path)
+    if request.args.get("gen") and request.args.get("gen") != gen:
+        return jsonify({"ok": True, "reset": True, "gen": gen})
+    if log == "console" and not raw:
+        uf = _load_console_filters()
+        lines, start, _ = _read_back(path, before, n, keep=_console_keep(uf))
+        items = _console_items(lines, uf)
+        return jsonify({"ok": True, "gen": gen, "from": start, "done": start <= 0, "items": items})
+    if log == "console":
+        lines, start, _ = _read_back(path, before, n)
+        items = [{"t": t, "k": "err" if _classify(t) == "error" else "show", "o": o} for o, t in lines]
+        return jsonify({"ok": True, "gen": gen, "from": start, "done": start <= 0, "items": items})
+    lines, start, _ = _read_back(path, before, n)
+    texts = [t for _, t in lines]
+    try:
+        with open(DASHBOARD, encoding="utf-8") as f:
+            live_players = (json.load(f) or {}).get("players") or []
+    except Exception:                                    # noqa: BLE001
+        live_players = []
+    return jsonify({"ok": True, "gen": gen, "from": start, "done": start <= 0, "lines": texts,
+                    "offs": [o for o, _ in lines], "names": _act_names(texts, live_players)})
+
+
+# -- unit models for the map (owner 2026-10-05: "you already have all the icons you use for the video ... use those
+# also for this map"): the 2D replay video's top-down sprites of the game's own models (TacviewReplay\models, built
+# by build_models.py), copied into map_models\ next to this file: models.json + sprites\*.png.
+MAP_MODELS = os.path.join(HERE, "map_models")
+_SPRITE_RE = re.compile(r"^[A-Za-z0-9_.\- ()]+\.png$")
+
+
+@app.route("/api/models")
+def api_models():
+    try:
+        with open(os.path.join(MAP_MODELS, "models.json"), encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except (OSError, ValueError):
+        return jsonify({"models": {}, "names": {}})
+
+
+@app.route("/api/modelimg/<name>")
+def api_modelimg(name):
+    if not _SPRITE_RE.match(name or ""):
+        return ("", 404)
+    return send_from_directory(os.path.join(MAP_MODELS, "sprites"), name, max_age=86400)
+
+
+# -- NOBlackBox live map ---------------------------------------------------------------------------------------
+try:
+    import acmi_live as _acmi_live
+except Exception:                                        # noqa: BLE001 - the panel runs without it
+    _acmi_live = None
+_ACMI = {"f": None}
+
+
+def _acmi_connect():
+    """A fresh SFTP session of its own (READ-ONLY use) with the same login the bot uses."""
+    import paramiko
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(bot.SFTP_HOST, port=int(getattr(bot, "SFTP_PORT", 22) or 22), username=bot.SFTP_USER,
+                password=bot.SFTP_PASS, timeout=10, banner_timeout=15, auth_timeout=15,
+                look_for_keys=False, allow_agent=False)
+    try:
+        ssh.get_transport().set_keepalive(15)
+    except Exception:                                    # noqa: BLE001
+        pass
+    return ssh, ssh.open_sftp()
+
+
+def _start_workers():
+    """Background workers, started by __main__ only (importing cc_web starts nothing)."""
+    threading.Thread(target=_ConsoleArchiver().run, name="console-archive", daemon=True).start()
+    if _acmi_live is not None and getattr(bot, "SFTP_HOST", "") and getattr(bot, "SFTP_PASS", ""):
+        _ACMI["f"] = _acmi_live.AcmiFollower(_acmi_connect)
+        _ACMI["f"].start()
+        print("[webcc] NOBlackBox live map: following the host's recording (read-only)")
+    else:
+        print("[webcc] NOBlackBox live map: off (no acmi_live module or no SFTP login)")
+
+
 # ── Pterodactyl client API (Cloudflare-aware) ─────────────────────────────────
 _PT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -1323,7 +1772,7 @@ _toolkit_chk = {"ts": 0.0, "data": None}   # cached result of the last (network)
 
 def _json_version(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             return str((json.load(f) or {}).get("version", "") or "")
     except (OSError, ValueError):
         return ""
@@ -1379,6 +1828,7 @@ def api_toolkit():
     return jsonify({
         "toolkit_version": _json_version(TOOLKIT_META) or None,
         "plugin_version":  _json_version(DEPLOYED_META) or None,
+        "plugin_display":  _plugin_display_status(),
         "configured":      bool((upd.get("github_repo") or "").strip()),
         "check":           _toolkit_chk["data"],
         "checked_age":     (round(time.time() - _toolkit_chk["ts"], 1) if _toolkit_chk["ts"] else None),
@@ -1389,6 +1839,14 @@ def api_toolkit():
 def api_toolkit_check():
     """On-demand: ask GitHub (via the fork's updater.check) whether a newer release exists."""
     upd = (_toolkit_cfg().get("update") or {})
+    if not (upd.get("github_repo") or "").strip():
+        # No update repo set: updates are off. Never call updater.check() here - it runs
+        # _reconcile_stale_pending() BEFORE its own repo gate, which deletes a hand-staged
+        # pending_plugin.dll whose sidecar version is not newer than the deployed one.
+        d = {"configured": False, "installed": _json_version(TOOLKIT_META) or None, "latest": None, "newer": None,
+             "note": "updates are off (no update.github_repo in config.json) - stage pending_plugin.dll by hand"}
+        _toolkit_chk.update(ts=time.time(), data=d)
+        return jsonify({"ok": True, **d})
     try:
         mod = _updater_mod()
         comps = getattr(mod, "ALL_COMPONENTS", ("plugin", "bot", "webcc", "installer"))
@@ -1414,6 +1872,9 @@ def api_toolkit_update():
     (every replaced file is backed up; a bot / web-CC restart loads them). The PLUGIN is only
     STAGED — it deploys via the normal Schedule / --deploy-plugin flow, so clicking Update can
     never surprise-restart the match."""
+    if not ((_toolkit_cfg().get("update") or {}).get("github_repo") or "").strip():
+        # No update repo set: updates are off - this button must not run updater.py at all.
+        return jsonify({"ok": False, "error": "updates are off (no update.github_repo in config.json) - stage pending_plugin.dll by hand instead"})
     import subprocess
     import sys as _sys
     upy = os.path.join(HERE, "installer", "updater.py")
@@ -1476,8 +1937,40 @@ def api_state():
     raw = request.args.get("raw") == "1"
     # 110, not 80: webcc now drops the duplicate [BOT] chat echoes (one event = one feed line), which
     # measured ~16% of the log — sending the old 80 would quietly shrink the visible feed by that much.
-    st["activity"] = _tail(ACTIVITY, 110)
-    st["console"] = _console_view(_tail(CONSOLE, 400), raw)
+    # 1.9.4: each feed also carries where its oldest line starts + the file identity, so the panel can page
+    # further back (/api/loghist), and the activity feed carries the rank tag of every player it names.
+    _act, _ = _tail_lines(ACTIVITY, 110)
+    st["activity"] = [t for _, t in _act]
+    st["act_offs"] = [o for o, _ in _act]
+    st["act_from"] = _act[0][0] if _act else 0
+    st["act_gen"] = _file_gen(ACTIVITY)
+    try:
+        st["act_names"] = _act_names(st["activity"], st.get("players") or [])
+    except Exception:                                    # noqa: BLE001 - tags are decoration, never break the feed
+        st["act_names"] = {}
+    if raw:
+        _con, _ = _tail_lines(CONSOLE, 400)
+        st["console"] = [{"t": t, "k": "err" if _classify(t) == "error" else "show", "o": o} for o, t in _con]
+        st["con_from"] = _con[0][0] if _con else 0
+        st["con_gen"] = _file_gen(CONSOLE)
+    else:
+        _uf = _load_console_filters()
+        _con, _start, _ = _read_back(CONSOLE_ARCHIVE, None, 300, keep=_console_keep(_uf))
+        st["console"] = _console_items(_con, _uf)
+        _sum = _console_view(_tail(CONSOLE, 400), False)          # only for its "filtered N ..." summary line
+        if _sum and _sum[-1].get("k") == "sum":
+            st["console"].append(_sum[-1])
+        st["con_from"] = _start
+        st["con_gen"] = _file_gen(CONSOLE_ARCHIVE)
+    if _ACMI["f"] is not None and request.args.get("acmi") is not None:
+        try:
+            _since = int(request.args.get("acmi") or 0)
+        except ValueError:
+            _since = 0
+        try:
+            st["acmi"] = _ACMI["f"].snapshot(_since)
+        except Exception:                                # noqa: BLE001
+            st["acmi"] = {"live": False}
     m = (st.get("mission") or "").lower()
     # mission -> atlas terrain. Every stock Large Operation runs on Heartland EXCEPT Terminal
     # Control (Ignus Archipelago); Carrier Duel is on Ignus; scenario 13. Reprisal is on
@@ -1537,6 +2030,10 @@ def api_state():
     # mission_pvp; mission_label just mirrors the bot's already-prefixed mission (never re-prefixed).
     st["mission_label"] = st.get("mission") or ""
     st["deploy"] = _deploy_status()
+    st["plugin_display"] = _plugin_display_status(st)
+    if st["plugin_display"]["version_mismatch"]:
+        st["deploy"]["ready"] = False
+        st["deploy"]["readiness_error"] = "Bot-reported and deployment-record versions disagree."
     st["toolkit_version"] = _json_version(TOOLKIT_META) or None   # header chip; None in a dev checkout
     return jsonify(st)
 
@@ -1685,6 +2182,7 @@ _VOTEMAP_KEYS = {
     "coop_weights", "pvp_weights", "mission_weights", "guaranteed", "avoid_recent",
     "force_pvp_enabled", "force_pvp_players", "force_pvp_coop", "force_pvp_pvp",
     "coop_minutes", "builtin_minutes",
+    "vote_style", "variants",                    # 1.9.0: one or two rounds; which missions are variants of which
     "boot_map",                                  # FIX 4: default/boot mission the server rotates to
     "ballot_size", "mode",                       # legacy aliases (bot maps them); harmless to keep
 }
@@ -2601,4 +3099,5 @@ if __name__ == "__main__":
         print("[webcc] auth: off (optional: web.auth_token / NOCC_AUTH_TOKEN)")
     _pt_load()
     print(f"[webcc] pterodactyl: {'ready (' + (_pt.get('server') or '') + ')' if _pt.get('server') else 'NOT configured - ' + str(_pt.get('err'))}")
+    _start_workers()                                     # 1.9.4: console archive + NOBlackBox live map follower
     app.run(host=HOST, port=PORT, threaded=True)

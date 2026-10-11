@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -95,10 +96,12 @@ def _changelog_section(version):
     return body
 
 
-def _notes(version, signed):
+def _notes(version, signed, bundles=("pterodactyl", "local", "manual")):
+    names = " / ".join({"pterodactyl": "Pterodactyl", "local": "Local", "manual": "Manual"}[t] for t in bundles)
     lines = ["Automated release of the Nuclear Option community toolkit.",
              "", "- Plugin + bot version: **%s**" % version.lstrip("v"),
-             "- Bundles: Pterodactyl / Local / Manual (each a full self-contained install).",
+             ("- Bundles: %s (each a full self-contained install)." if len(bundles) > 1
+              else "- Bundle: %s (a full self-contained install).") % names,
              "- Updater assets: NukeStats.dll, no_mapvote_bot.py.",
              "- %s" % ("All assets are **minisign-signed**; the public key ships as `installer/trusted.pub`."
                        if signed else "**Unsigned build** (testing).")]
@@ -151,6 +154,7 @@ def main(argv=None):
     bb_argv = ["--out", out, "--force", "--version", version]
     if a.allow_stale_dll:
         bb_argv.append("--allow-stale-dll")
+    built_after = time.time() - 1          # a zip older than this run is a leftover, never an asset
     rc = bb.main(bb_argv)
     if rc:
         raise SystemExit("bundle build failed")
@@ -168,8 +172,13 @@ def main(argv=None):
     print("[release] smoke check OK (key modules compile)")
 
     # 2. assemble the updater assets (plugin DLL + the scrubbed bot)
-    assets = [os.path.join(out, "nuclear-option-toolkit-%s.zip" % t)
-              for t in ("pterodactyl", "local", "manual")]
+    # the bundle types build_bundles actually built this run (its default is pterodactyl only)
+    bundles = [t for t in ("pterodactyl", "local", "manual")
+               if os.path.exists(os.path.join(out, "nuclear-option-toolkit-%s.zip" % t))
+               and os.path.getmtime(os.path.join(out, "nuclear-option-toolkit-%s.zip" % t)) >= built_after]
+    if not bundles:
+        raise SystemExit("no bundle zip was built")
+    assets = [os.path.join(out, "nuclear-option-toolkit-%s.zip" % t) for t in bundles]
     dll = os.path.join(out, "NukeStats.dll")
     shutil.copy2(bb.SRC_DLL, dll)
     bot_src = os.path.join(out, "_clean", "no_mapvote_bot.py")     # the scrubbed bot
@@ -193,6 +202,28 @@ def main(argv=None):
         raise SystemExit("command-centre.zip is empty — web-CC files missing from the clean tree")
     assets += [webcc_zip]
 
+    # live map extras as their own signed zip (1.9.0): the updater flattens command-centre.zip into one
+    # folder, so the unit icons (map_models/), the sharper map images and the NOBlackBox live map module
+    # reach an updated install this way. The bundles already carry them.
+    clean = os.path.join(out, "_clean")
+    extras_zip = os.path.join(out, "live-map-extras.zip")
+    with zipfile.ZipFile(extras_zip, "w", zipfile.ZIP_DEFLATED) as z:
+        for m in ("acmi_live.py", "heartland_map.png", "ignus_map.png"):
+            if not os.path.exists(os.path.join(clean, m)):
+                raise SystemExit("live-map-extras: %s missing from the clean tree" % m)
+            z.write(os.path.join(clean, m), m)
+        n_models = 0
+        for dp, dn, fn in os.walk(os.path.join(clean, "map_models")):
+            dn.sort()
+            for f in sorted(fn):
+                p = os.path.join(dp, f)
+                z.write(p, os.path.relpath(p, clean).replace(os.sep, "/"))
+                n_models += 1
+        if not n_models:
+            raise SystemExit("live-map-extras: map_models/ missing from the clean tree")
+        z.write(os.path.join(HERE, "bundle_readmes", "README.live-map-extras.txt"), "README live map extras.txt")
+    assets += [extras_zip]
+
     # 3. sha256 + sign every asset
     final = []
     for ap_ in assets:
@@ -214,7 +245,7 @@ def main(argv=None):
 
     # 4. publish
     token = pb._token()
-    rel = pb.get_or_create(token, tag, name, _notes(version, sign), prerelease)
+    rel = pb.get_or_create(token, tag, name, _notes(version, sign, bundles), prerelease)
     for f in final:
         pb.upload_asset(token, rel, f)
     print("DONE. https://github.com/%s/releases/tag/%s" % (pb.REPO, tag))

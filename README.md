@@ -14,21 +14,34 @@ I run two servers on this. This is the public version of it.
 ## Features
 
 - **Map voting**: a vote opens when a mission ends, or when a player types `!votemap`. The server
-  loads whichever map won.
+  loads whichever map won. It can also run in two rounds, the mission first and then its time of day
+  or weather (you set up the variants in the Missions window), or be turned off.
 - **Ranks and points**: points come from real in-game score and persist between matches. The rank
   ladder ships empty, so you write your own in the dashboard. Until you do, ranks stay off and the
   points and leaderboard still work.
 - **Team-kill enforcement**: eject, then kick, then ban, counted per match. Blast damage is traced
-  back to whoever launched, so a nuke doesn't get blamed on the wrong person.
+  back to whoever launched, so a nuke doesn't get blamed on the wrong person. Anyone flagged for
+  teamkilling 3 or more times gets a warning when they join, and their first teamkill in a match kicks
+  them straight away.
 - **Exploit protection**: drops commands aimed at units that are already destroyed. Left alone that
   exploit overflows every client's send buffer and drops the whole lobby. Kicks after 3 strikes in
   10 seconds.
+- **High-ping kicker**: once the server is busy, anyone whose average ping stays over the limit gets a
+  private warning and is kicked a minute later unless it drops, highest ping first. This goes off the
+  average so a spike will not get anyone kicked.
+- **AI that gets off the ground**: AI planes take off from the three nearest friendly airports and no
+  longer sit stuck on a busy taxiway. A side that is short of AI can also spawn up to three every five
+  seconds, where the game spawns one. The taxi fixes are based on parts of Appulcake's AI Plane
+  Unstuck.
 - **Team balancing**: evens out the PvP sides. Being moved doesn't count as a death or cost points.
 - **Chat messages**: welcome and join lines, messages on a timer, and a `!help` list you write.
 - **Scheduled restarts and plugin updates**, with players warned first.
 - **Mission pool**: turn missions on and off for the vote, add one from Steam Workshop, or upload
   your own.
 - **Shared ranks**: one points table across two or more of your own servers.
+- **Performance tools**: tools that show exactly where the server spends its time, written to
+  `perf_log.csv` once a minute, plus settings for the frame rate the server aims for and the number of
+  physics worker threads.
 
 ## Installation
 
@@ -75,7 +88,9 @@ across the top. Panels below that, each one can be hidden, and it remembers your
 
 **Live map**
 Every player and AI unit as they fly. Named blips are players, unnamed ones are AI. Lavender and
-yellow are the two factions. Scroll to zoom, drag to pan.
+yellow are the two factions. Scroll to zoom, drag to pan. Units are drawn with icons taken from the
+game's own models, and with the optional NOBlackBox recorder installed the map also shows ground
+vehicles, missiles and bombs, explosions, wrecks, gun rounds and flares (see below).
 
 ![Live map](docs/preview/map.png)
 
@@ -86,8 +101,9 @@ the other team, or send them a message.
 ![Players](docs/preview/players.png)
 
 **Activity and console**
-Chat, joins, kills, votes, rank-ups and admin actions in one list, with buttons to filter it. The
-game server's own console output sits below it, and a command box below that.
+Chat, joins, kills, votes, rank-ups and admin actions in one list, with buttons to filter it. It goes
+back as far as the log does, with a line marking each day. The game server's own console output opens
+in its own window from the Console button, and the command box sits below the activity.
 
 ![Activity](docs/preview/activity.png)
 
@@ -118,7 +134,7 @@ Admin only: `!balance`, `!forceteamswap <player>`, `!setrank <player> <n>`,
 
 ## Settings
 
-All 92 of them are in the dashboard under Settings > Game Settings. Searchable, each with a
+All 113 of them are in the dashboard under Settings > Game Settings. Searchable, each with a
 description in plain English and the value it ships with. Most take effect on the next tick.
 
 ![Game settings](docs/preview/settings.png)
@@ -142,6 +158,39 @@ SAM or another auto-firing defence get logged, but don't count against whoever p
 
 Bans, reports and the game's own vote-kick are in the Moderation window.
 
+Anyone flagged for teamkilling 3 or more times goes on a watch list, which is also in the Moderation
+window. They get a warning when they join the server. Their first teamkill in a match skips the eject
+and kicks them straight away, which resets their rank to 0. Another teamkill that match is a ban.
+
+The high-ping kicker turns on once 13 or more players are on a co-op mission (15 or more on PvP).
+Anyone whose ping averages 250ms or more over 30 seconds gets a private warning and is kicked 60
+seconds later unless it drops. It starts with the highest ping and only kicks as many people as it
+takes to get the server back down to 12 (14 on PvP). Of note, rejoining with a high ping gets a player
+kicked again, and the third kick keeps them out until the next mission. Admins are never kicked, and
+the limit, the player counts and the warning time are all in Game Settings.
+
+## Live map extras and Tacview replays (optional)
+
+This is only needed if you want the live map to show everything or want to watch matches back in
+Tacview later. The toolkit runs without it.
+
+NOBlackBox is the Tacview recorder for Nuclear Option, made by KopterBuzz and its contributors. My
+fork of it at [Tomosnuclearbombos/NOBlackBox](https://github.com/Tomosnuclearbombos/NOBlackBox)
+is the build my servers run, and KopterBuzz gave the OK to fork it. Pilot names show in the
+recordings, and so do gun rounds from where they were fired to where they ended up. It also has a fair
+bit of performance work and two memory leak fixes.
+
+1. Download `NOBlackBox.dll` from the fork's releases and put it in `BepInEx/plugins/` on the game
+   server, next to `NukeStats.dll`.
+2. Start the server once so it writes `BepInEx/config/xyz.KopterBuzz.NOBlackBox.cfg`, then set
+   `OutputPath = /home/container/tacview/`, which is the folder the live map reads. Of note, set
+   `RecordSteamID = false` as well if you share the recordings, given it writes each player's Steam
+   ID into the file by default.
+3. Restart the server. The dashboard picks the recording up by itself (on an install updated from
+   1.5.0, add `live-map-extras.zip` first, see [Updating](#updating)).
+
+Each mission is saved there as an `.acmi` file, which can be watched back in Tacview (free on Steam).
+
 ## Updating
 
 Nothing updates itself. Pull updates from Settings > Updates in the dashboard, or from the command
@@ -156,6 +205,12 @@ python installer/updater.py update --deploy    # also deploys the plugin, which 
 `--stage-only` downloads and checks without installing. `--component bot` does one part on its own.
 Replaced files are backed up as `*.bak-<version>`, and the bot and dashboard need a restart to pick
 up new ones.
+
+Of note, the updater only brings the bot, the plugin and the dashboard's own files. Coming from 1.5.0,
+grab `live-map-extras.zip` from the release page as well and unzip it into the toolkit folder, which
+adds the unit icons, the sharper maps and the NOBlackBox live map module. The NOBlackBox part needs
+the recorder on the game server, see
+[Live map extras and Tacview replays](#live-map-extras-and-tacview-replays-optional).
 
 Every download is checked against the SHA-256 published on the release and against a minisign
 signature. If the signature can't be checked the updater stops, unless you pass
@@ -199,6 +254,12 @@ and play on the servers I run it on.
 
 AI was used to help write parts of the code and the docs here. The design and the decisions are
 mine. The whole thing came out of running two of my own servers, which is what it was built for.
+
+## Credits
+
+The AI taxi and spawn fixes are based on parts of AI Plane Unstuck by Appulcake, used under its MIT
+licence, and that notice is kept in `src/NukeStats/AirbaseTaxi.cs`. NOBlackBox is by KopterBuzz, with
+7ep3s, TunderTunder, RehabRocket, TYKUHN2, CircuitButKerbin, dv-dt-dino and Klawifiantix.
 
 ## Licence
 

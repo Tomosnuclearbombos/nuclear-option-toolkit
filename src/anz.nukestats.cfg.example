@@ -2,26 +2,31 @@
 ## Copy to BepInEx/config/anz.nukestats.cfg on the server, OR let the setup wizard
 ## generate one from your feature choices. Tune everything LIVE in the web CC Settings menu.
 
-[AILimit]
-## Performance guard: caps AI aircraft and clears stuck ones; only ever removes AI, never players.
-Enforce = true
-
-## Max AI aircraft flying per faction; the excess (grounded/lowest first) is destroyed.
-PerTeamAICap = 32
-
-## Max total aircraft (AI + players); when exceeded, AI is removed from the busiest side, never a player.
-TotalAircraftCap = 64
-
-## A grounded AI that hasn't moved for this many seconds is cleared to free a clogged runway. 0 = off.
-StuckSeconds = 45
-
-## Movement radius in metres under which a grounded AI counts as 'not moving' for the stuck check.
-StuckRadiusMetres = 25
-
-
 [Admin]
 ## Comma-separated SteamIDs allowed to use in-game team commands (!move/!spec/!join/!balance).
 SteamIds = 
+
+
+[AiAirportRotation]
+## Spread AI aircraft spawns across nearby friendly airports instead of the one the game picks.
+Enabled = true
+
+## How many of the nearest compatible airports share AI departures.
+PreferredAirbases = 3
+
+
+[AirbaseTaxi]
+## AI taxi/takeoff fixes (parts of Appulcake's AI Plane Unstuck, MIT) so AI get off the ground at busy airbases.
+Enabled = true
+
+## The AI plane first in the takeoff queue stops braking for others and commits to the runway.
+AggressiveTakeoff = true
+
+## A landing plane only blocks takeoffs while on the runway or within this many metres of it.
+LandingBlockRange = 750
+
+## Most AI aircraft a side may spawn per 5-second check while it is short of AI (1 = the game's own).
+MaxSpawnsPerCheck = 3
 
 
 [Balance]
@@ -100,6 +105,27 @@ HideRepairMessages = true
 [Mission]
 ## PvP matches: every player starts at at least this in-game rank (funds/loadout floor). 0 = off; PvE unaffected.
 PvpStartingRank = 3
+
+
+[Perf]
+## Frame-rate target while a mission runs. 0 = the game's own (60). Physics stays at 60 steps a second.
+TargetFps = 0
+
+## Physics worker threads. 0 = the game's own choice.
+JobWorkers = 0
+
+
+[PingKick]
+## When the server is busy, warn then kick players whose AVERAGE ping stays at or above the limit.
+Enabled = true
+
+## Average ping (ms) that counts as high.
+MaxPingMs = 250
+
+## Co-op / PvP: the kicker is on while MORE than this many players are on.
+PvEPlayers = 12
+
+PvPPlayers = 14
 
 
 [PvE]

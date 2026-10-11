@@ -47,7 +47,7 @@ Because chat is rerouted as a *server message* to control format+colour:
    - From the server (pull with the bot, e.g.
      `run.bat --get "NuclearOptionServer_Data/Managed/Assembly-CSharp.dll" "NukeStats/libs/Assembly-CSharp.dll"`):
      `Assembly-CSharp.dll`, `Assembly-CSharp-firstpass.dll`, `UnityEngine.dll`,
-     `UnityEngine.CoreModule.dll`, `Mirage.dll`
+     `UnityEngine.CoreModule.dll`, `UnityEngine.AnimationModule.dll`, `Mirage.dll`, `Mirage.SocketLayer.dll`
    - From the BepInEx pack's `BepInEx/core/`: `BepInEx.dll`, `0Harmony.dll`
 3. `dotnet build -c Release` → produces `bin/Release/NukeStats.dll`.
 

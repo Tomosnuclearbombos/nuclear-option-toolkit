@@ -88,10 +88,12 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
   /* column/row tracks come from custom properties so the ▦ Panels show/hide feature can
      re-balance the grid without fighting the mobile media query (which sets the properties
      directly and therefore still wins on narrow screens). */
-  .main{display:grid;grid-template-columns:var(--cols,minmax(330px,1.2fr) 1.05fr);gap:9px;min-height:0}
+  /* 1.9.4 (owner): two columns. Activity is the same height as the Live Map and Command the same as Players, so the
+     rows line up across; the console opens in its own popup. */
+  .main{display:grid;grid-template-columns:var(--cols,minmax(330px,1.2fr) minmax(300px,1.05fr));gap:9px;min-height:0}
   .col{display:grid;gap:9px;min-height:0}
-  .left{grid-template-rows:var(--rows-left,1.25fr 1fr)}
-  .right{grid-template-rows:var(--rows-right,1.15fr auto 1.85fr)}   /* activity | console(small) | command(LARGE) */
+  .left{grid-template-rows:var(--rows-left,minmax(0,1.25fr) minmax(0,1fr))}     /* map | players */
+  .right{grid-template-rows:var(--rows-right,minmax(0,1.25fr) minmax(0,1fr))}   /* activity (= map) | command (= players) */
   /* ── per-panel show/hide (▦ Panels menu; choice saved in this browser) ── */
   .card.pnhidden{display:none!important}
   .col.colhidden{display:none}
@@ -135,7 +137,7 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
     background:rgba(6,13,22,.72);padding:1px 8px;border-radius:5px;pointer-events:none;min-width:30px;min-height:15px}
   .legend{display:flex;gap:11px;flex-wrap:wrap;padding:5px 12px;font-size:10.5px;color:var(--dim);border-top:1px solid var(--bd2)}
   .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:4px}
-  .legend .lgs{vertical-align:middle;margin-right:3px}
+  .legend .lgs,.legend .lgm{vertical-align:middle;margin-right:3px}
   .legend .gl{font-weight:700;margin-right:3px}
   .airpanel{padding:6px 12px 8px;border-top:1px solid var(--bd2);font-size:11.5px;background:#070d15}
   .airhd{display:flex;justify-content:space-between;align-items:center;color:var(--dim);font-size:9.5px;
@@ -190,6 +192,24 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
   #console .feed{font-size:11.5px}
   #console .ln.err{color:#ff8d8d}#console .ln.sum{color:#5a6b7d;font-style:italic}
   #console .ln{color:var(--dim);cursor:pointer}#console .ln:hover{background:var(--hover)}
+  /* 1.9.4: console popup (movable + resizable, not a modal) */
+  .conpop{position:fixed;z-index:80;right:24px;top:96px;width:min(780px,92vw);height:min(480px,72vh);min-width:320px;min-height:180px;
+    display:none;flex-direction:column;background:var(--panel);border:1px solid var(--bd);border-radius:12px;
+    box-shadow:0 18px 50px rgba(0,0,0,.55);resize:both;overflow:hidden}
+  .conpop.on{display:flex}
+  .conpop .hd{cursor:move;user-select:none;flex:none}
+  .conpop .hd button{cursor:pointer}
+  #conBtn[aria-pressed="true"]{border-color:var(--ac);background:var(--acc-soft)}
+  /* 1.9.4: scroll-up history marker + the date line between days (activity + console) */
+  .histtop{font:11px ui-sans-serif,system-ui,sans-serif;color:var(--dim);text-align:center;padding:3px 0 1px;min-height:4px}
+  .feed .ln.day{cursor:default;color:var(--dim);text-align:center;font:700 10.5px ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.5px;text-transform:uppercase;margin:7px -4px 4px;padding:4px 0 2px;border-top:1px solid var(--bd);border-radius:0}
+  .feed .ln.day:hover{background:transparent}
+  /* 1.9.4: rank tag + name in the rank's colour (chat, join, leave) */
+  .rkn{font-weight:700}
+  /* 1.9.4: the legend entries for what only the NOBlackBox feed draws show only while that feed is live */
+  .legend .acmiLg{display:none}
+  .legend.acmi .acmiLg{display:inline}
   /* command area */
   #out{flex:1;min-height:0;overflow:auto;padding:7px 11px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
   #out .echo{color:#8aa0c0}#out .ok{color:var(--ok)}#out .er{color:var(--bad)}
@@ -409,6 +429,7 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
         <button class="bad killbtn" data-sig="kill" onclick="power('kill')" title="Force-kill the game server (hard stop — use if a normal Stop hangs)">✖ Kill</button>
       </div>
       <div class="navgrp" role="group" aria-label="View">
+        <button id="conBtn" onclick="toggleConsole()" aria-pressed="false" title="Open the server console in its own window (it stays open while you use the rest)">🖥 Console</button>
         <div class="dd" id="panelDD">
           <button id="panelMenuBtn" onclick="togglePanelMenu(event)" aria-haspopup="true" aria-expanded="false" title="Show / hide dashboard panels (saved in this browser)">▦ Panels ▾</button>
           <div class="ddmenu" id="panelMenu" role="menu" aria-label="Show or hide dashboard panels"></div>
@@ -432,19 +453,23 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
         <div class="legend">
           <span><i style="background:#2f9d49"></i>land</span>
           <span><i style="background:#060d16"></i>water</span>
-          <span><span class="gl" style="color:var(--bdf)">▲</span><span class="gl" style="color:var(--pala)">▲</span>plane</span>
-          <span><span class="gl" style="color:var(--bdf)">+</span><span class="gl" style="color:var(--pala)">+</span>heli</span>
-          <span class="muted">lavender = BDF · yellow = PALA · named = player, unnamed = AI</span>
-          <span><canvas class="lgs" data-cls="patrol"></canvas>patrol boat</span>
-          <span><canvas class="lgs" data-cls="corvette"></canvas>corvette</span>
-          <span><canvas class="lgs" data-cls="argus"></canvas>argus</span>
-          <span><canvas class="lgs" data-cls="destroyer"></canvas>destroyer</span>
-          <span><canvas class="lgs" data-cls="carrier"></canvas>carrier</span>
-          <span><canvas class="lgs" data-cls="cursor"></canvas>cursor</span>
+          <span><canvas class="lgm" data-k="air"></canvas>aircraft</span>
+          <span><canvas class="lgm" data-k="heli"></canvas>helicopter</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="gndair"></canvas>aircraft on ground</span>
+          <span><canvas class="lgm" data-k="sea"></canvas>ship</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="gnd"></canvas>ground vehicle</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="wpn"></canvas>missile / bomb</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="x"></canvas>destroyed</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="boom"></canvas>explosion</span>
+          <span class="acmiLg"><canvas class="lgm" data-k="nuke"></canvas>nuclear blast</span>
+          <span class="acmiLg"><span class="gl" style="color:#ffe9a8">·</span>gun rounds</span>
+          <span class="acmiLg"><span class="gl" style="color:#ffb347">·</span>flares</span>
           <span><span class="gl" style="color:#aeb6c2">◌</span>bases</span>
           <span>✝ killed</span>
+          <span class="muted">lavender = BDF · yellow = PALA · named = player, unnamed = AI</span>
           <span class="muted">no blip = spectating / left aircraft safely</span>
           <span class="muted">scroll/drag/dbl-click zoom · ◎ recenter</span>
+          <span class="muted" id="acmiNote" title="Units, weapons and rounds come from the NOBlackBox recording of the running mission (players from the live player feed)"></span>
         </div>
         <div id="airpanel" class="airpanel" style="display:none"></div>
       </div>
@@ -459,14 +484,7 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
     <div class="col right">
       <div class="card" data-panel="activity">
         <div class="hd"><b>Activity</b><span class="sp"></span><span class="actfl" id="actFilterBar" title="Show/hide activity categories (saved in this browser)"></span><button class="sm pnx" onclick="hidePanel('activity')" title="Hide this panel (restore via ▦ Panels)" aria-label="Hide the Activity panel">✕</button></div>
-        <div class="bd"><div id="activity" class="feed"></div></div>
-      </div>
-      <div class="card" id="console" style="max-height:24vh" data-panel="console">
-        <div class="hd"><b>Console</b><span class="sp"></span>
-          <button class="sm" id="filtbtn" onclick="openFilters()" title="custom message filters you've added">filters</button>
-          <button class="sm" id="rawbtn" onclick="toggleRaw()">filtered</button>
-          <button class="sm pnx" onclick="hidePanel('console')" title="Hide this panel (restore via ▦ Panels)" aria-label="Hide the Console panel">✕</button></div>
-        <div class="bd"><div id="con" class="feed"></div></div>
+        <div class="bd" id="actBody"><div id="actTop" class="histtop"></div><div id="activity" class="feed"></div></div>
       </div>
       <div class="card" data-panel="command">
         <div class="hd"><b>Command</b><span class="sp"></span>
@@ -482,6 +500,16 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
       </div>
     </div>
   </div>
+</div>
+
+<!-- 1.9.4 (owner): the console in its own window. Movable (drag the title bar) and resizable (bottom-right corner); NOT a
+     modal, so the dashboard keeps working behind it. Position and size are remembered in this browser. -->
+<div id="console" class="conpop" role="dialog" aria-labelledby="conTitle" aria-hidden="true">
+  <div class="hd" id="conHd"><b id="conTitle">🖥 Console</b><span class="muted" id="conInfo" style="margin-left:8px;text-transform:none;letter-spacing:0"></span><span class="sp"></span>
+    <button class="sm" id="filtbtn" onclick="openFilters()" title="custom message filters you've added">filters</button>
+    <button class="sm" id="rawbtn" onclick="toggleRaw()">filtered</button>
+    <button class="sm" onclick="toggleConsole(false)" title="Close the console" aria-label="Close the console">✕</button></div>
+  <div class="bd" id="conBody"><div id="conTop" class="histtop"></div><div id="con" class="feed"></div></div>
 </div>
 
 <!-- command palette -->
@@ -636,6 +664,7 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
         <button class="sm" id="modTabReports" onclick="modTab('reports')">🛡 Reports</button>
         <button class="sm" id="modTabBanned" onclick="modTab('banned')">⛔ Banned players</button>
       </div>
+      <div id="tkWatchBox" class="stbox" style="margin-bottom:11px"></div>
       <div id="repPane">
         <div class="muted" style="font-size:11px;margin-bottom:10px">Auto-kick for unit-command flooding. <b>that</b> player (not the lobby) and logs it here. Use <b>Ban</b> to block them permanently (kicks on rejoin); <b>Unban</b> to reverse it. Tune the detection in ⚙ Settings → Anti-Grief.</div>
         <div id="repList">loading…</div>
@@ -700,7 +729,7 @@ let lastActivity=[];   // last feed payload, so a theme toggle can recolour it i
 // past tip ≤MAP_COAST_S then HOLD. Death ✝ / hide prompt. Far jumps ≥MAX_GLIDE_M snap.
 const WEBCC_BUILD='map-delay-v7';
 const posHistory={}; let mapRenderTime=null;
-const MAP_DELAY_S=3.0;         // playback delay; must exceed the plugin's 2s pos cadence or the lerp buffer starves
+let MAP_DELAY_S=3.0;           // playback delay; must exceed the plugin's 2s pos cadence or the lerp buffer starves (1.9.4: MAP_DELAY_ACMI while the NOBlackBox feed is live, see acmiIngest)
 const MAP_COAST_S=0.35;        // past tip: coast at last segment velocity this long, then HOLD
 const MAX_GLIDE_M=1600;        // players: far snap / new life. 2s pos cadence x 700 m/s max + margin - 500 made every fast jet teleport
 const MAX_ENT_GLIDE_M=3000;    // ships/AI: refuse cross-map leaps. 1200 was sized for "~1s samples", which the feed CANNOT deliver: unlike players (pos_trail carries every PosTick with its emit ts) the ent feed has NO trail - the bot keeps only the LAST {"t":"ent"} frame of each console poll (CONSOLE_POLL_INTERVAL=1.5s) and stamps it with the browser's receive time, so one stamped segment carries 1-2 MapEntTick ticks (1s each) of flight, and more whenever the console poll stalls. 700 m/s airframe ceiling x ~4s + margin; a genuine leap is >=1 grid cell (10 km) and still snaps. At 1200 the fastest AI held-then-jumped every segment.
@@ -710,6 +739,10 @@ function _mapClock(){return Date.now()/1000;}  // unix seconds — same domain a
 // AI aircraft + ships feed (no SteamID; keyed by the plugin's per-unit instance id 'i').
 let entities=null;            // {a:[...AI aircraft...], s:[...ships...]} from /api/state, or null
 const entHistory={};          // 'a'+i / 's'+i -> {samples:[], meta} for delayed playback
+// 1.9.4 NOBlackBox live map blend state (drawAcmi / acmiIngest below)
+const MAP_DELAY_BASE=3.0, MAP_DELAY_ACMI=4.0;   // the recording feed measured 0.4-1.0 s behind + a 1 s file poll + the 0.5 s page poll
+let acmiSeq=0, acmiLive=false;
+const acmiHist={};               // recording id -> {samples:[{t,x,z,h}], meta:{k,c,n,p,v,d,r}, rmAt}
 const cpuHist=[],memHist=[];
 function _dist2(ax,az,bx,bz){const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;}
 // Ring-buffer append. `now` MUST be _mapClock() (same clock as tDraw). Same-pos: update
@@ -852,13 +885,45 @@ function worldToGridLabel(d,x,z){const R=majRow(d,z),C=majCol(d,x);if(R<0||C<0)r
   return String.fromCharCode(65+R)+String.fromCharCode(97+minRow(d,z))+((C+1)*SUB+minCol(d,x));}
 const GUT_L=26,GUT_T=20;                       // coordinate-gutter sizes (css px)
 let mapImg=null,view={scale:1,base:1,panX:0,panY:0,init:false};
+// Sharp terrain pictures (owner's 4096 / 8192 px exports, 2026-10-05) cover the game's exact terrain grid, measured
+// against the terrain meshes in the game files: Heartland = 16 x 16 tiles of 5120 m = +-40960 m, Ignus = +-81920 x
+// +-40960 m, both centred on 0. The old 1254 / 1795 px pictures keep the atlas bounds they were calibrated to.
+const HD_MAP_BOUNDS={heartland:[-40960,40960,40960,-40960],ignus:[-81920,81920,40960,-40960]};
+function mapImgBounds(){const b=(mapImg&&mapImg.naturalWidth>=3000)?HD_MAP_BOUNDS[atlasKey]:null;
+  return b?{x0:b[0],x1:b[1],z0:b[2],z1:b[3]}:{x0:atlas.x0,x1:atlas.x1,z0:atlas.z0,z1:atlas.z1};}
+// A 4096-8192 px picture drawn every frame cost ~25 ms (was 4). So: halved copies are made once when it loads (the
+// smallest one still at least as big as on screen is used, which also scales better), and the drawn terrain is kept
+// in a canvas that is only redrawn when the view changes (pan, zoom, resize); every other frame just copies it.
+let _mapPyr=null,_terrC=null,_terrKey='',mapEdgeCol='#000';
+// the grid squares outside the picture take the picture's own edge colour (black for the green maps), like the video
+// fills around its map (owner 2026-10-05: "for the rest of the grids on the map, could you make them black please?")
+function _edgeCol(lv){try{const s=lv[lv.length-1],w=s.naturalWidth||s.width,h=s.naturalHeight||s.height;
+  const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.drawImage(s,0,0);
+  const px=[];for(const [a,b] of [[0,0],[w-1,0],[0,h-1],[w-1,h-1],[w>>1,0],[w>>1,h-1],[0,h>>1],[w-1,h>>1]])px.push(x.getImageData(a,b,1,1).data);
+  const m=i=>Math.round(px.reduce((t,p)=>t+p[i],0)/px.length);return 'rgb('+m(0)+','+m(1)+','+m(2)+')';}catch(e){return '#000';}}
+function _buildPyr(img){const lv=[img];let w=img.naturalWidth,h=img.naturalHeight,src=img;
+  while(w>1024){w=Math.round(w/2);h=Math.round(h/2);const c=document.createElement('canvas');c.width=w;c.height=h;
+    const x=c.getContext('2d');x.imageSmoothingEnabled=true;x.imageSmoothingQuality='high';x.drawImage(src,0,0,w,h);lv.push(c);src=c;}
+  return lv;}
+function drawTerrain(ctx,cv,dpr){
+  const ib=mapImgBounds(),dx=w2cx(ib.x0),dy=w2cy(ib.z0),dw=(ib.x1-ib.x0)*view.scale,dh=(ib.z0-ib.z1)*view.scale;
+  const key=[cv.width,cv.height,dpr,dx.toFixed(2),dy.toFixed(2),dw.toFixed(2),dh.toFixed(2),mapImg.src].join('|');
+  if(key!==_terrKey||!_terrC){
+    if(!_terrC)_terrC=document.createElement('canvas');
+    _terrC.width=cv.width;_terrC.height=cv.height;
+    const tx=_terrC.getContext('2d');tx.fillStyle=mapEdgeCol;tx.fillRect(0,0,_terrC.width,_terrC.height);   // clipped to the map area when copied
+    tx.setTransform(dpr,0,0,dpr,0,0);tx.imageSmoothingEnabled=true;tx.imageSmoothingQuality='high';
+    const lv=(_mapPyr&&_mapPyr[0]===mapImg)?_mapPyr:[mapImg];let pick=lv[0];
+    for(const l of lv){if((l.naturalWidth||l.width)>=dw*dpr)pick=l;}   // smallest copy still >= its on-screen size
+    tx.drawImage(pick,dx,dy,dw,dh);_terrKey=key;}
+  ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.drawImage(_terrC,0,0);ctx.restore();}
 async function ensureMap(k){
   if(k===atlasKey)return;
   if(!k){atlasKey=k;atlas=null;mapImg=null;view.init=false;_mapName='';updateMapTitle();render();return;}
   let d; try{ d=await jget('/api/map?key='+k); }catch(e){ return; }   // transient fetch failure: keep the OLD atlas; the next 1s tick retries (atlasKey unchanged)
   if(!d||d.error){atlasKey=k;atlas=null;mapImg=null;view.init=false;_mapName='';updateMapTitle();render();return;}   // definitive "no atlas for this mission": clear — no map is better than the WRONG map
   atlasKey=k;atlas=d;mapImg=null;view.init=false;_mapName=d.name||'';updateMapTitle();   // commit only on SUCCESS — a failure must not wedge atlasKey and blank the map for the whole mission
-  if(d.img){const im=new Image();im.onload=()=>{mapImg=im;view.init=false;render();};im.onerror=()=>{render();};im.src='/api/mapimg?key='+k+'&v='+Date.now();}
+  if(d.img){const im=new Image();im.onload=()=>{mapImg=im;_mapPyr=_buildPyr(im);mapEdgeCol=_edgeCol(_mapPyr);_terrKey='';view.init=false;render();};im.onerror=()=>{render();};im.src='/api/mapimg?key='+k+'&v='+Date.now();}
   else render();}
 function mapM(){const wrap=$('#map').parentElement;const W=wrap.clientWidth||10,H=wrap.clientHeight||10;
   return{W,H,ix:GUT_L,iy:GUT_T,iw:Math.max(1,W-GUT_L),ih:Math.max(1,H-GUT_T)};}
@@ -890,10 +955,11 @@ function render(){
   ctx.fillStyle='#060d16';ctx.fillRect(0,0,W,H);
   if(!atlas||!mapImg){return;}
   if(!view.init)fitView();clampView();
+  ICON_SCALE=iconScale();                     // icons keep the video's proportion to the map (see iconScale)
   const m=mapM(),s=span();
   ctx.save();ctx.beginPath();ctx.rect(m.ix,m.iy,m.iw,m.ih);ctx.clip();
   ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
-  ctx.drawImage(mapImg,w2cx(atlas.x0),w2cy(atlas.z0),s.w*view.scale,s.h*view.scale);
+  drawTerrain(ctx,cv,dpr);
   // grid lines (screen space, crisp 1px)
   ctx.lineWidth=1;ctx.strokeStyle='rgba(120,205,150,.15)';ctx.beginPath();
   {const e=ext();   // grid lines across the FULL a1..p grid (culled to the viewport)
@@ -911,12 +977,16 @@ function render(){
   const now=(mapRenderTime!=null?mapRenderTime:_mapClock());
   const tDraw=now-MAP_DELAY_S;
   // ── AI aircraft + ships first (players drawn above) ──
-  for(const k in entHistory){
+  // 1.9.4: while the NOBlackBox feed is live it draws every recorded unit instead (drawAcmi); otherwise the plugin's
+  // AI aircraft + ship feed below, exactly as before.
+  if(acmiLive){try{drawAcmi(ctx,tDraw);}catch(e){console.error('drawAcmi',e);}}
+  else for(const k in entHistory){
     const h=entHistory[k],e=h.meta; if(!e)continue;
     const g=_posAt(h,tDraw,MAX_ENT_GLIDE_M); if(!g)continue;
     const x=g.x,z=g.z,hdg=g.hdg;
     const cx=w2cx(x),cy=w2cy(z),col=facColor(e.f);
-    if(e.ship){drawShip(ctx,cx,cy,e.ship,col,hdg);continue;}
+    if(e.ship){if(!drawModel(ctx,modelLookup(shipModelName(e.ship,e.f),'sea'),'sea',cx,cy,hdg,sideCol(e.f),1))drawShip(ctx,cx,cy,e.ship,col,hdg);continue;}
+    if(drawModel(ctx,modelLookup('',e.kind==='h'?'heli':'air'),e.kind==='h'?'heli':'air',cx,cy,hdg,sideCol(e.f),1))continue;   // 1.9.4: the video's default model (the plugin feed has no type)
     ctx.save();ctx.translate(cx,cy);
     if(hdg!=null)ctx.rotate(hdg*Math.PI/180);
     const glyph=e.kind==='h'?'+':'▲';
@@ -940,6 +1010,9 @@ function render(){
     const g=_posAt(h,tDraw,MAX_GLIDE_M); if(!g)continue;
     const x=g.x,z=g.z,hdg=(g.hdg!=null?g.hdg:(p.h!=null?p.h:null));
     const cx=w2cx(x),cy=w2cy(z);
+    // 1.9.4: the player's own aircraft model (the Players table's aircraft code), like the video; the name stays above
+    const pk=p.klass==='h'?'heli':'air';
+    if(drawModel(ctx,modelLookup(p.aircraft,pk),pk,cx,cy,hdg,sideCol(p.faction),1)){nameLabel(ctx,cx,cy-Math.round(6.5*ICON_SCALE+4.5),_playerMapLabel(p));continue;}
     ctx.fillStyle=facColor(p.faction);ctx.beginPath();ctx.arc(cx,cy,5.6,0,7);ctx.fill();
     ctx.strokeStyle='#fff';ctx.lineWidth=1.4;ctx.stroke();
     ctx.save();ctx.translate(cx,cy);
@@ -996,12 +1069,155 @@ function drawShip(ctx,cx,cy,cls,col,hdg){
 // faint 10x10 sub-grid inside each on-screen major cell + minor addresses, drawn only when zoomed in
 // enough (viewport-culled, theme greens). Slots in after the major grid, inside the same clip.
 // paint the legend's ship glyphs (same drawShip used on the map) so the legend matches exactly
+// ── 1.9.4 unit models (owner 2026-10-05: "you already have all the icons you use for the video, could you use those
+// also for this map? I would just use all the same things"). The 2D replay video's top-down sprites of the game's own
+// models (TacviewReplay\models -> map_models\, served by cc_web), drawn exactly the way the video draws them: shade
+// (0.22 + grey) x the side colour, a ~1 px dark outline, the video's on-screen sizes (grow with the real size, x0.5),
+// turned to the heading. Ground units a shade darker and weapons paler, like the video. Unknown types use the
+// video's default model for the kind; until a sprite has loaded the old glyph stands in.
+const MODEL_SCALE=0.5;            // the video's ("scale down all the models to half their current size")
+const MODEL_DEFAULT={air:'Fighter1',heli:'AttackHelo1',sea:'Corvette1',gnd:'Truck2-L',wpn:'AAM2'};
+const VIDEO_X_SCALE=0.25;         // the video's destroyed X ("about a quarter of their current size")
+const X_FADE_S=300;               // the video fades an X over 3 video seconds at 100x = 300 s of the mission
+const NUKE_MIN_R=1000, NUKE_FADE_S=4, NUKE_RGB='255,214,110';   // the video's nuclear blast ring
+const BOOM_FADE_S=2, BOOM_RGB='255,128,40', BOOM_MIN_PX=3;    // smaller explosions: true radius, quick fade (owner 2026-10-07)
+const BOOM_MIN_S=0.5;            // owner 2026-10-08: every explosion shows at full strength for at least 0.5 s
+// NUKE_FADE_S: the ring fades out over 4 s once the blast ends (it grows ~10 s to ~3.5 km, then the recorder removes
+// it) - the same time it stays on screen in the video. It was 400 s (the video's 4 s at 100x as MATCH time), so on
+// the live map a ring lingered ~7 minutes after the blast (owner 2026-10-05: "the nuke icons stay ... after going off")
+const WPN_STREAK_S=5;             // the video's weapon streak = one frame at 100x / 20 fps
+const GROUND_ALPHA=110/255;       // anything on the ground: the video's dimmed aircraft-on-ground, now ground units too
+                                  // (owner 2026-10-05: "make the ground units and everything on the ground transparent
+                                  // like the aircraft")
+let MDB=null;                     // {models, names, code}
+const _mImg={}, _mPrep={};
+(async()=>{try{const d=await jget('/api/models');
+  if(d&&d.models&&Object.keys(d.models).length){
+    const code={};                // aircraft codes ("KR-67") as the Players table reports them
+    for(const k in d.models){const e=d.models[k];if(e&&e.code&&e.kind==='air'){const c=String(e.code).toLowerCase();if(!code[c])code[c]=k;}}
+    MDB={models:d.models,names:d.names||{},code};paintLegend();}}catch(e){}})();
+function modelPx(kind,e){const L=Math.max(e.len_m,e.wid_m);let px;
+  if(kind==='air'||kind==='heli')px=Math.min(40,Math.max(18,26*Math.sqrt(L/16)));
+  else if(kind==='sea')px=Math.min(52,Math.max(16,46*Math.pow(L/250,0.6)));
+  else if(kind==='gnd')px=Math.min(12,Math.max(8,11*Math.sqrt(L/9)));
+  else px=Math.min(14,Math.max(8,10*Math.sqrt(L/3.6)));
+  return px*MODEL_SCALE;}
+function modelLookup(name,kind){if(!MDB)return null;
+  const n=String(name||'').trim().toLowerCase(),first=n.split(' ')[0];
+  let p=MDB.names[n]||(n.includes(' ')?MDB.names[first]:null)||MDB.code[n]||MDB.code[first];
+  if(!p||!MDB.models[p])p=MODEL_DEFAULT[kind];
+  return (p&&MDB.models[p])?p:null;}
+function _hexRgb(h){h=String(h||'').trim();
+  if(/^#[0-9a-f]{3}$/i.test(h))h='#'+h[1]+h[1]+h[2]+h[2]+h[3]+h[3];
+  if(!/^#[0-9a-f]{6}$/i.test(h))return [178,184,196];
+  const n=parseInt(h.slice(1),16);return [n>>16,(n>>8)&255,n&255];}
+function _rgbHex(r,g,b){return '#'+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');}
+function sideCol(f){const [r,g,b]=_hexRgb(facColor(f));return _rgbHex(r,g,b);}
+function gndCol(f){const [r,g,b]=_hexRgb(facColor(f));return _rgbHex(r*0.86,g*0.86,b*0.86);}             // the video's SIDE_GND
+// weapons: the video's SIDE_WPN (55% towards white) as it actually SHOWS on the video. The MP4 encode strips nearly all
+// the colour from something this thin (measured on a rendered match, brightest pixel per weapon: BDF (199,205,211), PALA
+// (171,169,176)), so missiles and bombs read as white there; the owner wants that same white look here (2026-10-05).
+// Same brightness, 10% of the colour left.
+function wpnCol(f){const [r,g,b]=_hexRgb(facColor(f));const t=0.55,R=r+(255-r)*t,G=g+(255-g)*t,B=b+(255-b)*t;
+  const y=0.2126*R+0.7152*G+0.0722*B,k=0.1;return _rgbHex(y+(R-y)*k,y+(G-y)*k,y+(B-y)*k);}
+// ── crisper icons (owner 2026-10-05: "make the icon fix"). Two causes of the blur, two fixes:
+// 1. SIZE: the sizes above are the video's, made for a 720 px video frame; on a 2560x1440 screen the fullscreen map is
+//    ~2.6x the video's scale, so a helicopter was ~13 px. ICON_SCALE keeps the video's PROPORTION to the map instead:
+//    the default (fit) view's pixels per metre / the video's for that map (tacview_video Layout: Heartland 0.006,
+//    Ignus 0.00533), never below 1 (never smaller than before) and at most 3. Zooming in does not change it.
+// 2. DOUBLE RESAMPLING: the sprite was shrunk into a small canvas, then resampled AGAIN when drawn turned and at a
+//    fractional position. Now each icon is drawn once from a 2x copy of the 512 px source, already turned (5 degree
+//    steps), tinted and outlined, and placed on whole screen pixels with no further scaling.
+const VIDEO_PPM={heartland:0.006,ignus:0.005333}, ICON_STEP=5, ICON_CACHE_MAX=4000;
+let ICON_SCALE=1;
+function iconScale(){if(!atlas)return 1;const m=mapM(),s=span();
+  const base=Math.min(m.iw/s.w,m.ih/s.h);                                     // the default (fit) view, not the zoom
+  const sc=base/(VIDEO_PPM[atlasKey]||0.006);
+  return Math.round(Math.max(1,Math.min(3,sc))*20)/20;}                       // 0.05 steps keep the icon cache small
+const _mSrc={};                    // prefab|kind|scale|dpr -> {c: 2x tinted-later source, w, h (final px), px, py (pivot)}
+let _mPrepN=0;
+function _modelSrc(prefab,kind,sc,dpr,e,img){
+  const key=prefab+'|'+kind+'|'+sc+'|'+dpr;let s=_mSrc[key];if(s)return s;
+  const span=Math.max(e.len_m,e.wid_m)*e.ppm,f=modelPx(kind,e)*sc*dpr/span;
+  let fx=f;if(kind==='wpn')fx=Math.max(f,2.2*MODEL_SCALE*sc*dpr/Math.max(1e-3,(e.body_m||e.wid_m)*e.ppm));   // thin weapons stay visible
+  const w=Math.max(2,img.naturalWidth*fx),h=Math.max(2,img.naturalHeight*f);
+  const c=document.createElement('canvas');c.width=Math.max(4,Math.round(w*2));c.height=Math.max(4,Math.round(h*2));
+  const cx=c.getContext('2d');cx.imageSmoothingEnabled=true;cx.imageSmoothingQuality='high';cx.drawImage(img,0,0,c.width,c.height);
+  return _mSrc[key]={c,w,h,px:e.cx*w/img.naturalWidth,py:e.cy*h/img.naturalHeight};}
+function _modelPrep(prefab,kind,col,sc,hdg){
+  const dpr=window.devicePixelRatio||1,b=Math.round((((hdg||0)%360)+360)%360/ICON_STEP)%Math.round(360/ICON_STEP);
+  const key=prefab+'|'+kind+'|'+col+'|'+sc+'|'+dpr+'|'+b;
+  const hit=_mPrep[key];if(hit!==undefined)return hit;
+  const e=MDB&&MDB.models[prefab];if(!e)return null;
+  let img=_mImg[prefab];
+  if(!img){img=_mImg[prefab]=new Image();
+    img.onload=()=>{for(const k in _mPrep)if(_mPrep[k]===null&&k.indexOf(prefab+'|')===0)delete _mPrep[k];};
+    img.src='/api/modelimg/'+encodeURIComponent(e.sprite)+'?v='+[e.w,e.h,e.cx,e.cy].join('_');}   // a rebuilt sprite gets a new URL (the route caches for a day)
+  if(!img.complete||!img.naturalWidth){_mPrep[key]=null;return null;}   // still loading: the glyph stands in
+  if(++_mPrepN>ICON_CACHE_MAX){for(const k in _mPrep)delete _mPrep[k];_mPrepN=1;}   // bounded: rebuilt on demand
+  const src=_modelSrc(prefab,kind,sc,dpr,e,img),o=Math.max(1,Math.round(0.9*dpr));
+  // pivot at the centre of an even-sized square big enough for any turn + the outline
+  const S=2*Math.ceil((Math.hypot(src.w,src.h)+2*o+4)/2),half=S/2;
+  const body=document.createElement('canvas');body.width=S;body.height=S;
+  const bx=body.getContext('2d');bx.imageSmoothingEnabled=true;bx.imageSmoothingQuality='high';
+  bx.translate(half,half);bx.rotate(b*ICON_STEP*Math.PI/180);bx.drawImage(src.c,-src.px,-src.py,src.w,src.h);
+  const id=bx.getImageData(0,0,S,S),px=id.data,[cr,cg,cb]=_hexRgb(col);
+  for(let i=0;i<px.length;i+=4){const l=0.22+px[i]/255;px[i]=Math.min(255,l*cr);px[i+1]=Math.min(255,l*cg);px[i+2]=Math.min(255,l*cb);}
+  bx.setTransform(1,0,0,1,0,0);bx.putImageData(id,0,0);
+  const sil=document.createElement('canvas');sil.width=S;sil.height=S;const sx=sil.getContext('2d');
+  sx.drawImage(body,0,0);sx.globalCompositeOperation='source-in';sx.fillStyle='rgb(5,7,10)';sx.fillRect(0,0,S,S);
+  const dil=document.createElement('canvas');dil.width=S;dil.height=S;const dx=dil.getContext('2d');
+  for(const [ox,oy] of [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1],[0,0]])dx.drawImage(sil,ox*o,oy*o);
+  const out=document.createElement('canvas');out.width=S;out.height=S;const ox2=out.getContext('2d');
+  ox2.globalAlpha=0.85;ox2.drawImage(dil,0,0);ox2.globalAlpha=1;ox2.drawImage(body,0,0);   // outline under the body, like the video
+  return _mPrep[key]={c:out,half};}
+// draw a unit's model; false = not available yet (the caller draws the old glyph). sc = icon scale (default the map's)
+function drawModel(ctx,prefab,kind,x,y,hdg,col,alpha,sc){
+  if(!prefab)return false;
+  const p=_modelPrep(prefab,kind,col,sc==null?ICON_SCALE:sc,(hdg!=null&&isFinite(hdg))?hdg:0);if(!p)return false;
+  const T=ctx.getTransform(),dx=T.a*x+T.c*y+T.e,dy=T.b*x+T.d*y+T.f;          // where (x,y) lands in device pixels
+  ctx.save();ctx.setTransform(1,0,0,1,0,0);
+  if(alpha!=null&&alpha<1)ctx.globalAlpha=alpha;
+  ctx.drawImage(p.c,Math.round(dx-p.half),Math.round(dy-p.half));ctx.restore();return true;}   // whole pixels: no resampling
+// the video's destroyed X: a dark X under a smaller one in the colour of the side that lost the unit, fading out
+function drawDeadX(ctx,x,y,col,s,a,lw){   // s = half size in px: the map uses the video's (7 or 5) x VIDEO_X_SCALE; lw = line scale
+  ctx.save();ctx.lineCap='round';
+  lw=lw||1;ctx.globalAlpha=0.63*a;ctx.strokeStyle='#000';ctx.lineWidth=2*lw;ctx.beginPath();
+  ctx.moveTo(x-s-0.5,y-s-0.5);ctx.lineTo(x+s+0.5,y+s+0.5);ctx.moveTo(x-s-0.5,y+s+0.5);ctx.lineTo(x+s+0.5,y-s-0.5);ctx.stroke();
+  ctx.globalAlpha=a;ctx.strokeStyle=col;ctx.lineWidth=lw;ctx.beginPath();
+  ctx.moveTo(x-s,y-s);ctx.lineTo(x+s,y+s);ctx.moveTo(x-s,y+s);ctx.lineTo(x+s,y-s);ctx.stroke();ctx.restore();}
+// the video's nuclear blast ring (fill + outline in the nuke colour)
+function drawNukeRing(ctx,x,y,r,fillA,lineA){ctx.beginPath();ctx.arc(x,y,Math.max(2,r),0,7);
+  if(fillA>0){ctx.fillStyle='rgba('+NUKE_RGB+','+fillA.toFixed(3)+')';ctx.fill();}
+  ctx.lineWidth=2;ctx.strokeStyle='rgba('+NUKE_RGB+','+lineA.toFixed(3)+')';ctx.stroke();}
+// a smaller explosion: an orange flash at its recorded radius, like Tacview's (a far-off one still shows as a dot)
+function drawBoom(ctx,x,y,r,a){ctx.beginPath();ctx.arc(x,y,Math.max(BOOM_MIN_PX,r),0,7);
+  ctx.fillStyle='rgba('+BOOM_RGB+','+(0.45*a).toFixed(3)+')';ctx.fill();
+  ctx.lineWidth=1;ctx.strokeStyle='rgba('+BOOM_RGB+','+(0.95*a).toFixed(3)+')';ctx.stroke();}
+// plugin ship classes (when the recording feed is off) -> a model of that class
+function shipModelName(cls,fac){return {patrol:'surf class patrol boat',corvette:'shard class corvette',argus:'argus class frigate',
+  destroyer:'dynamo class destroyer',cursor:'cursor class lfd',
+  carrier:(/bosc/i.test(fac||'')?'annex class carrier':'hyperion class carrier')}[cls]||'shard class corvette';}
+// legend icons: the video's legend (models in a neutral colour)
 function paintLegend(){
-  document.querySelectorAll('canvas.lgs').forEach(cv=>{
-    const dpr=window.devicePixelRatio||1,W=34,Hh=15;
+  const neutral='#cdd3dd';
+  document.querySelectorAll('canvas.lgm').forEach(cv=>{
+    const dpr=window.devicePixelRatio||1,W=26,Hh=18,k=cv.dataset.k;
     cv.width=W*dpr;cv.height=Hh*dpr;cv.style.width=W+'px';cv.style.height=Hh+'px';
     const ctx=cv.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,Hh);
-    drawShip(ctx,W/2,Hh/2,cv.dataset.cls,'#cfe0f5',0);   // heading 0 = bow up; neutral pale = show SHAPE
+    const x=W/2,y=Hh/2;let ok=false;
+    if(k==='air'||k==='gndair')ok=drawModel(ctx,MDB&&MDB.models.Fighter1?'Fighter1':null,'air',x,y,45,neutral,k==='gndair'?GROUND_ALPHA:1,1);
+    else if(k==='heli')ok=drawModel(ctx,MDB&&MDB.models.AttackHelo1?'AttackHelo1':null,'heli',x,y,45,neutral,1,1);
+    else if(k==='sea')ok=drawModel(ctx,MDB&&MDB.models.FleetCarrier1?'FleetCarrier1':null,'sea',x,y,45,neutral,1,1);
+    else if(k==='gnd')ok=drawModel(ctx,MDB&&MDB.models.MBT?'MBT':null,'gnd',x,y,45,neutral,GROUND_ALPHA,1);
+    else if(k==='wpn'){ctx.strokeStyle='rgba(205,211,221,.47)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x-9,y+5);ctx.lineTo(x-3,y+1.7);ctx.stroke();
+      ok=drawModel(ctx,MDB&&MDB.models.AAM2?'AAM2':null,'wpn',x,y,60,neutral,1,1);}
+    else if(k==='x'){drawDeadX(ctx,x,y,neutral,5,1);ok=true;}   // the video's legend X is full size
+    else if(k==='nuke'){drawNukeRing(ctx,x,y,7,0.2,1);ok=true;}
+    else if(k==='boom'){drawBoom(ctx,x,y,4,1);ok=true;}
+    if(!ok){ctx.fillStyle=neutral;ctx.font='bold 11px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(k==='heli'?'+':k==='gnd'?'■':k==='sea'?'◆':'▲',x,y);
+      if(MDB)setTimeout(paintLegend,400);}   // a sprite was still loading: paint again
   });
 }
 function drawMinorGrid(ctx,m){
@@ -1054,7 +1270,7 @@ function drawMap(ps){
   }
   // Only paint here in the states the 60fps rafLoop is NOT already covering (tab hidden, a modal
   // covers the map, or no blips to animate); otherwise the next animation frame paints _posAt(t).
-  if(document.hidden||document.querySelector('.ov.on')||!((lastPlayers&&lastPlayers.length)||Object.keys(entHistory).length))render();
+  if(document.hidden||document.querySelector('.ov.on')||!((lastPlayers&&lastPlayers.length)||Object.keys(entHistory).length||Object.keys(acmiHist).length))render();
 }
 // Fold the AI-aircraft + ship feed into entHistory, keyed by the plugin's per-unit instance id, so
 // each unit uses the same delayed ring-buffer playback as player blips (MAP_DELAY_S + max-dist snap).
@@ -1073,6 +1289,125 @@ function recordEntities(ent){
     if(!live.has(k)&&( !last||last.t<cutoff)) delete entHistory[k];
   }
 }
+// ── 1.9.4 NOBlackBox live map blend (owner 2026-10-04: "the noblackbox live map blend") ──────────────────────────
+// cc_web follows the running mission's Tacview recording on the host and sends what changed (?acmi=<seq>). While that
+// feed is live the map draws every recorded unit from it (AI aircraft and helicopters, ground units, ships, missiles
+// and bombs with a short trail, gun rounds, flares, explosions and nuke shockwaves, ejected pilots, and a fading ✕
+// where something was destroyed) and the plugin's AI/ship feed steps aside. Players stay on the player feed (names,
+// ping, click actions); their recorded aircraft carry the pilot's name and are skipped. Everything plays back on the
+// same delayed clock, a little further behind while the recording feed is in use (it lands in small pieces).
+// When the feed is not live the map is exactly what it was before.
+function _acmiPush(h,t,x,z,hd){const s=h.samples,last=s.length?s[s.length-1]:null;
+  if(last&&t<=last.t)return;      // a repeat or out of order
+  s.push({t:t,x:x,z:z,h:(hd==null?null:hd)});
+  if(s.length>40)s.splice(0,s.length-40);}
+// destroyed units and nuclear blasts are kept apart from the objects so they fade on the video's timing even after the
+// recorder has removed the object: deaths = [{t,x,z,c,big}], blasts = id -> {x,z,t0,pts:[[t,r]...],end}
+const acmiDeaths=[], acmiBlasts={};
+function _acmiClear(){for(const k in acmiHist)delete acmiHist[k];acmiDeaths.length=0;for(const k in acmiBlasts)delete acmiBlasts[k];}
+function acmiIngest(a){
+  const note=$('#acmiNote');
+  if(note){const t=(a&&a.live)?'units, weapons + rounds: NOBlackBox recording':'';if(note.textContent!==t)note.textContent=t;}
+  const lg=document.querySelector('#mapCard .legend');if(lg)lg.classList.toggle('acmi',!!(a&&a.live));
+  if(!a||!a.live){
+    if(acmiLive){acmiLive=false;MAP_DELAY_S=MAP_DELAY_BASE;}
+    if(Object.keys(acmiHist).length||acmiDeaths.length)_acmiClear();
+    acmiSeq=0;return;}
+  if(!acmiLive){acmiLive=true;MAP_DELAY_S=MAP_DELAY_ACMI;}
+  if(a.full)_acmiClear();
+  for(const o of (a.objs||[])){
+    if(!o||o.i==null)continue;
+    let h=acmiHist[o.i];if(!h)h=acmiHist[o.i]={samples:[],meta:null,rmAt:null};
+    const wasDead=h.meta&&h.meta.d!=null;
+    h.meta={k:o.k,c:o.c||'',n:o.n||'',p:o.p||'',pl:!!o.pl,g:!!o.g,v:o.v!==0,d:(o.d!=null?+o.d:null),r:(o.r!=null?+o.r:null),
+            model:null,mk:null};
+    for(const s of (o.s||[])){if(s&&s.length>=3&&isFinite(s[0])&&isFinite(s[1])&&isFinite(s[2]))_acmiPush(h,+s[0],+s[1],+s[2],s[3]);}
+    const last=h.samples.length?h.samples[h.samples.length-1]:null;
+    // a destruction: the X goes where the unit was - aircraft, ships, ground units and buildings, like the video's
+    // losses. Players are left out: their ✝ (player feed) already marks it.
+    if(h.meta.d!=null&&!wasDead&&last&&!h.meta.pl&&'ahsgdB'.indexOf(h.meta.k)>=0)
+      acmiDeaths.push({t:h.meta.d,x:last.x,z:last.z,c:h.meta.c,big:(h.meta.k==='a'||h.meta.k==='h'||h.meta.k==='s')});
+    // every explosion: grows with the recorded radius, then fades. Nuclear size (the video's NUKE_MIN_RADIUS) keeps
+    // the ring; anything smaller is drawn as a flash at its true radius (owner 2026-10-07)
+    if(h.meta.k==='x'&&h.meta.r!=null&&last){
+      let b=acmiBlasts[o.i];if(!b)b=acmiBlasts[o.i]={x:last.x,z:last.z,t0:h.samples[0].t,pts:[],end:null,nuke:false};
+      if(h.meta.r>=NUKE_MIN_R)b.nuke=true;
+      const rt=(o.rt!=null?+o.rt:last.t);const lp=b.pts.length?b.pts[b.pts.length-1]:null;
+      if(!lp||(rt>lp[0]&&h.meta.r!==lp[1]))b.pts.push([rt,h.meta.r]);}}
+  for(const r of (a.rm||[])){const h=acmiHist[r[0]];if(h)h.rmAt=+r[1];const b=acmiBlasts[r[0]];if(b)b.end=+r[1];}
+  if(a.seq!=null)acmiSeq=a.seq;
+  const tDraw=_mapClock()-MAP_DELAY_S;
+  for(const k in acmiHist){const h=acmiHist[k];if(h.rmAt!=null&&tDraw>h.rmAt+1)delete acmiHist[k];}
+  while(acmiDeaths.length&&tDraw-acmiDeaths[0].t>X_FADE_S)acmiDeaths.shift();
+  for(const k in acmiBlasts){const b=acmiBlasts[k],last=b.pts.length?b.pts[b.pts.length-1][0]:b.t0;
+    if(tDraw-Math.max(last,b.end||0,b.nuke?0:b.t0+BOOM_MIN_S)>(b.nuke?NUKE_FADE_S:BOOM_FADE_S))delete acmiBlasts[k];}}
+function shipClassOf(n){n=String(n||'').toLowerCase();
+  if(/patrol|landing craft|otb/.test(n))return 'patrol';
+  if(/corvette/.test(n))return 'corvette';
+  if(/frigate|argus/.test(n))return 'argus';
+  if(/destroyer/.test(n))return 'destroyer';
+  if(/carrier/.test(n))return 'carrier';
+  if(/lfd|cursor/.test(n))return 'cursor';
+  return 'corvette';}
+const ACMI_MK={a:'air',h:'heli',s:'sea',g:'gnd',d:'gnd',m:'wpn',b:'wpn'};   // recorder kind -> the video's model kind
+function _acmiModel(h){const e=h.meta;if(e.mk===null){e.mk=ACMI_MK[e.k]||'';e.model=e.mk?modelLookup(e.n,e.mk):null;}return e.model;}
+// heading along the flight path over the last stretch (the video points weapons where they are going)
+function _pathHdg(h,tDraw,g){let a=null;for(const s of h.samples){if(s.t<tDraw-0.6)a=s;else break;}
+  if(!a)return g.hdg;const dx=g.x-a.x,dz=g.z-a.z;if(dx*dx+dz*dz<1)return g.hdg;
+  return Math.atan2(dx,dz)*180/Math.PI;}
+function drawAcmi(ctx,tDraw){
+  const L={ground:[],ship:[],air:[],wpn:[],small:[]};
+  for(const id in acmiHist){
+    const h=acmiHist[id],e=h.meta;if(!e||!h.samples.length)continue;
+    if(e.pl)continue;                                       // a player's aircraft: drawn from the player feed
+    if(tDraw<h.samples[0].t)continue;                       // not there yet on the delayed clock
+    if(h.rmAt!=null&&tDraw>h.rmAt)continue;
+    if(e.d!=null&&tDraw>=e.d)continue;                      // destroyed: its X is drawn from acmiDeaths
+    if(!e.v||e.k==='B'||e.k==='x')continue;                 // standing buildings: not drawn; explosions come from acmiBlasts
+    if(e.k==='r'&&(h.samples.length<2||tDraw>h.samples[h.samples.length-1].t))continue;   // a round needs both ends
+    const k=e.k;
+    if(k==='g'||k==='d')L.ground.push(h);
+    else if(k==='s')L.ship.push(h);
+    else if(k==='a'||k==='h')L.air.push(h);
+    else if(k==='m'||k==='b')L.wpn.push(h);
+    else if(k==='r'||k==='f'||k==='e')L.small.push(h);}
+  const pos=h=>_posAt(h,tDraw,MAX_ENT_GLIDE_M);
+  ctx.lineJoin='round';
+  // the video's order: ground, ships, nuclear blasts, weapons, aircraft, destroyed X
+  for(const h of L.ground){const g=pos(h);if(!g)continue;const cx=w2cx(g.x),cy=w2cy(g.z);
+    if(drawModel(ctx,_acmiModel(h),'gnd',cx,cy,g.hdg,gndCol(h.meta.c),GROUND_ALPHA))continue;
+    ctx.globalAlpha=GROUND_ALPHA;
+    ctx.fillStyle=gndCol(h.meta.c);ctx.fillRect(cx-2.2,cy-2.2,4.4,4.4);ctx.lineWidth=1.1;ctx.strokeStyle='rgba(3,8,13,.9)';ctx.strokeRect(cx-2.2,cy-2.2,4.4,4.4);
+    ctx.globalAlpha=1;}
+  for(const h of L.ship){const g=pos(h);if(!g)continue;const cx=w2cx(g.x),cy=w2cy(g.z);
+    if(!drawModel(ctx,_acmiModel(h),'sea',cx,cy,g.hdg,sideCol(h.meta.c),1))drawShip(ctx,cx,cy,shipClassOf(h.meta.n),facColor(h.meta.c),g.hdg);}
+  for(const id in acmiBlasts){const b=acmiBlasts[id];if(!b.pts.length||tDraw<b.pts[0][0])continue;
+    const p=b.pts;let r=p[p.length-1][1];
+    for(let i=0;i<p.length;i++){if(p[i][0]>tDraw){const a0=i?p[i-1]:[b.t0,0],a1=p[i];
+      r=a0[1]+(a1[1]-a0[1])*Math.max(0,Math.min(1,(tDraw-a0[0])/Math.max(0.01,a1[0]-a0[0])));break;}}
+    const tEnd=Math.max(p[p.length-1][0],b.end||0,b.nuke?0:b.t0+BOOM_MIN_S);
+    const px=r*view.scale,cx=w2cx(b.x),cy=w2cy(b.z);
+    if(!b.nuke){const f=tDraw<=tEnd?1:1-(tDraw-tEnd)/BOOM_FADE_S;if(f>0)drawBoom(ctx,cx,cy,px,f);continue;}
+    if(tDraw<=tEnd)drawNukeRing(ctx,cx,cy,px,70/255,1);
+    else{const f=1-(tDraw-tEnd)/NUKE_FADE_S;if(f>0)drawNukeRing(ctx,cx,cy,px,55/255*f,230/255*f);}}
+  for(const h of L.wpn){const g=pos(h);if(!g)continue;const cx=w2cx(g.x),cy=w2cy(g.z),col=wpnCol(h.meta.c);
+    const pts=[];for(const s of h.samples){if(s.t>=tDraw-WPN_STREAK_S&&s.t<tDraw)pts.push(s);}
+    if(pts.length){ctx.beginPath();ctx.moveTo(w2cx(pts[0].x),w2cy(pts[0].z));for(let i=1;i<pts.length;i++)ctx.lineTo(w2cx(pts[i].x),w2cy(pts[i].z));
+      ctx.lineTo(cx,cy);ctx.lineWidth=2*ICON_SCALE;ctx.strokeStyle=col;ctx.globalAlpha=120/255;ctx.stroke();ctx.globalAlpha=1;}
+    if(drawModel(ctx,_acmiModel(h),'wpn',cx,cy,_pathHdg(h,tDraw,g),col,1))continue;
+    ctx.beginPath();ctx.arc(cx,cy,2.4,0,7);ctx.fillStyle=col;ctx.fill();}
+  for(const h of L.small){const g=pos(h);if(!g)continue;const cx=w2cx(g.x),cy=w2cy(g.z),k=h.meta.k;
+    if(k==='r'){ctx.fillStyle='#ffe9a8';ctx.fillRect(cx-.9,cy-.9,1.8,1.8);}
+    else if(k==='f'){ctx.fillStyle='#ffb347';ctx.beginPath();ctx.arc(cx,cy,1.6,0,7);ctx.fill();}
+    else{ctx.beginPath();ctx.arc(cx,cy,3,0,7);ctx.fillStyle='#ffffff';ctx.fill();ctx.lineWidth=1.4;ctx.strokeStyle=facColor(h.meta.c);ctx.stroke();}}
+  for(const h of L.air){const g=pos(h);if(!g)continue;const cx=w2cx(g.x),cy=w2cy(g.z),mk=h.meta.k==='h'?'heli':'air';
+    if(drawModel(ctx,_acmiModel(h),mk,cx,cy,g.hdg,sideCol(h.meta.c),h.meta.g?GROUND_ALPHA:1))continue;   // on the ground: dimmed, like the video
+    ctx.save();ctx.translate(cx,cy);if(g.hdg!=null)ctx.rotate(g.hdg*Math.PI/180);
+    ctx.font='bold 12px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.lineWidth=2.6;ctx.strokeStyle='rgba(3,8,13,.92)';ctx.strokeText(mk==='heli'?'+':'▲',0,0);
+    ctx.fillStyle=facColor(h.meta.c);ctx.fillText(mk==='heli'?'+':'▲',0,0);ctx.restore();}
+  for(const d of acmiDeaths){if(tDraw<d.t)continue;const a=1-(tDraw-d.t)/X_FADE_S;if(a<=0)continue;
+    drawDeadX(ctx,w2cx(d.x),w2cy(d.z),sideCol(d.c),(d.big?7:5)*VIDEO_X_SCALE*ICON_SCALE,a,ICON_SCALE);}}
 // ── team data panel: per side — score, AI + player aircraft, and the pads still standing ──
 // Hangars and helipads are counted SEPARATELY on purpose: a helipad cannot launch a jet, so a single
 // combined number would read as fixed-wing spawn capacity a side may not actually have. The plugin
@@ -1221,18 +1556,32 @@ function nearBottom(c){return c.scrollHeight-c.scrollTop-c.clientHeight<44;}
 function pin(c,was,fromBottom){if(was)c.scrollTop=c.scrollHeight;else c.scrollTop=Math.max(0,c.scrollHeight-fromBottom);}
 // ── activity-feed category FILTER (per-operator view preference, persisted in localStorage,
 //    matching the nocc_theme pattern). Purely client-side: filters the rendered feed only.
+// 1.9.4 (owner 2026-10-04): "Ranks & map" is split into Ranks and Map, each with its own colour; whispers are sorted into
+// kinds (picked from the 10,367 whispers logged on both servers: 75% points & lives, 11% skill rating, 11% welcome, 3%
+// rank-ups & titles, under 1% replies); every filter chip wears its category's colour, so the bar doubles as a legend.
+// The 4th field is the TAGCOL key that gives the category its colour.
 const ACT_CATS=[
-  ['chat','Chat','Everything said in game chat: players, the in-game admin, the panel Say box and the bot’s replies to chat commands'],
-  ['pm','Whispers','Private whispers ([PM] lines): one-to-one messages between the bot and a single player — private !help, whisper replies and notices'],
-  ['bot','Bot','Only what the bot itself said or did on its own: scheduled broadcasts and bot config confirmations'],
-  ['join','Join/Leave','Players joining and leaving'],
-  ['kills','Match','Kills, match results, end-of-mission ranks and awards'],
-  ['rank','Ranks & map','Rank-ups, prestige, map votes, map changes and mission timing'],
-  ['mod','Moderation','Kicks, bans, teamkill flags, admin actions, errors and warnings ([!] lines)'],
-  ['system','System','Bot/server status, config writes and name updates']];
+  ['chat','Chat','Everything said in game chat: players, the in-game admin, the panel Say box and the bot’s replies to chat commands','CHAT'],
+  ['pm','Whispers','Private whispers ([PM] lines) from the bot to one player. ▾ picks which kinds','PM'],
+  ['bot','Bot','Only what the bot itself said or did on its own: scheduled broadcasts and bot config confirmations','BOT'],
+  ['join','Join/Leave','Players joining and leaving','JOIN'],
+  ['kills','Match','Kills, match results, end-of-mission ranks and awards','MATCH'],
+  ['rank','Ranks','Rank-ups, prestige and rank funds','RANK'],
+  ['map','Map','Map votes, map changes, the next map loading and the mission time left','MAP'],
+  ['mod','Moderation','Kicks, bans, teamkill flags, admin actions (team moves too), errors and warnings ([!] lines)','!'],
+  ['system','System','Bot/server status, config writes and name updates','INFO']];
+// whisper kinds, tested in this order on the text after "-> Name: "
+const PM_KINDS=[
+  ['welcome','Welcome','WELCOME','The greeting a player gets on joining'],
+  ['rankup','Rank-ups','RANK-UP','Rank-up and prestige notices'],
+  ['other','Replies & other','REPLY','Command replies (!top, !rank, !prestige, !help) and anything else']];
+const PM_RX=[['welcome',/^Welcome\s/],['rankup',/ranked up|prestige/i]];
+function pmKind(body){const m=String(body).match(/^(?:->|<-)\s*.*?:\s([\s\S]*)$/);const t=m?m[1]:String(body);
+  for(const [k,rx] of PM_RX) if(rx.test(t)) return k;
+  return 'other';}
 const ACT_TAG2CAT={CHAT:'chat',PM:'pm',BOT:'bot',JOIN:'join',LEFT:'join',
   KILL:'kills',WIN:'kills',LOSS:'kills',END:'kills',MATCH:'kills',
-  RANK:'rank',VOTE:'rank',MAP:'rank',TEAM:'rank','!':'mod',ADMIN:'mod',
+  RANK:'rank',VOTE:'map',MAP:'map',TEAM:'mod','!':'mod',ADMIN:'mod',
   INFO:'system',OK:'system',CFG:'system',NAME:'system',CMD:'system'};   // any other / untagged tag -> 'system' (catch-all; never silently hidden)
 // The activity log writes "HH:MM:SS AM  [TAG] body", so the REAL tag is the first bracket on the line.
 // Anchor on it: rank abbreviations ([SQNLDR]) and clan tags inside player names ([MONEY] …) are brackets
@@ -1267,27 +1616,21 @@ const ACT_BOT_ECHO=[
 const ACT_BOT_RECLASS=[
   [/^== End of mission/,'kills'],                    // the only place the final scoreboard appears
   [/^Awards:/,'kills'],
-  [/^Loading the next map/,'rank'],
-  [/^Mission time: \d+ minutes? remaining/,'rank'],
+  [/^Loading the next map/,'map'],
+  [/^Mission time: \d+ minutes? remaining/,'map'],
   [/^Session-unkick /,'mod'],
   [/ - sent \+\d+ lines to server/,'chat']];         // the bot's public reply to a chat command
 // [ADMIN] carries two very different things: structured moderation records (below) and the operator's
 // own words typed into the panel Say box — those are chat, and the Chat toggle has to hide them.
 const ACT_ADMIN_STRUCT=/^(?:ADMIN KICK|Ban logged:|Ban-log entry removed|Banned |Unbanned |Cleared (?:all )?report|Server config:|Setting \S+ queued)/;
 const ACT_ADMIN_CHAT=/^\[ADMIN\] .+?: /;   // "[!] [ADMIN] <name>: <text>" = the in-game admin's own chat
-// category for a feed line, or null = never render it (duplicate echo)
-// The tab that owns a line is its CATEGORY, which is not always its raw tag: a [BOT] echo of a
-// rank-up is filed under Ranks & map, the in-game admin's own chat under Chat, and so on. Showing
-// the raw tag there made 461 live lines display one label while a different toggle hid them, which
-// reads as broken toggles. Chip shows the owning tab; the raw tag stays in the hover title.
-const ACT_CAT_LABEL={chat:'Chat',pm:'Whispers',bot:'Bot',join:'Join/Leave',kills:'Match',rank:'Ranks & map',mod:'Moderation',system:'System'};
-function actChipLabel(line,tag){
-  try{const c=actCat(line);const lbl=ACT_CAT_LABEL[c];
-      return (lbl&&lbl.toUpperCase()!==String(tag).toUpperCase())?lbl:tag;}catch(e){return tag;}
-}
+// category for a feed line, or null = never render it (duplicate echo).
+// 'day' = the 1.9.4 [DAY] date line: always shown, never filtered.
+const ACT_CAT_LABEL={};ACT_CATS.forEach(([k,l])=>ACT_CAT_LABEL[k]=l);
 function actCat(line){
   const p=actParts(line);
   if(!p.tag) return 'system';                                    // untagged bot-start banners
+  if(p.tag==='DAY') return 'day';
   if(p.tag==='BOT'){
     for(const rx of ACT_BOT_ECHO) if(rx.test(p.body)) return null;
     for(const [rx,cat] of ACT_BOT_RECLASS) if(rx.test(p.body)) return cat;
@@ -1297,63 +1640,303 @@ function actCat(line){
   if(p.tag==='!') return ACT_ADMIN_CHAT.test(p.body)?'chat':'mod';
   return ACT_TAG2CAT[p.tag]||'system';
 }
-let actFilter=(function(){const d={};ACT_CATS.forEach(([k])=>d[k]=true);   // default ALL on (fail-open)
-  try{const s=JSON.parse(localStorage.getItem('nocc_actfilter')||'{}');
-    if(s&&typeof s==='object')ACT_CATS.forEach(([k])=>{if(s[k]===false)d[k]=false;});}catch(e){}
-  return d;})();
-function saveActFilter(){try{localStorage.setItem('nocc_actfilter',JSON.stringify(actFilter));}catch(e){}}
-function toggleActCat(k){actFilter[k]=!actFilter[k];saveActFilter();
-  const c=document.querySelector('#actFilterBar .afc[data-k="'+k+'"]');
-  if(c){c.classList.toggle('on',actFilter[k]);c.setAttribute('aria-checked',actFilter[k]?'true':'false');}
-  syncActAllChip();
-  actSig='';try{renderActivity(lastActivity);}catch(e){}}   // refresh the feed instantly (same trick as toggleTheme)
-// "All" master chip: one click turns every category back on (it never hides anything).
-// Lit only while every toggle is on, so it doubles as an "am I filtering right now?" indicator.
-function actAllOn(){return ACT_CATS.every(([k])=>actFilter[k]!==false);}
-function syncActAllChip(){const a=document.querySelector('#actFilterBar .afc[data-k="__all"]');if(!a)return;
-  const on=actAllOn();a.classList.toggle('on',on);a.setAttribute('aria-pressed',on?'true':'false');}
-function showAllActCats(){if(actAllOn())return;ACT_CATS.forEach(([k])=>actFilter[k]=true);saveActFilter();
-  buildActFilterBar();
-  actSig='';try{renderActivity(lastActivity);}catch(e){}}
+// The tab that owns a line is its CATEGORY, which is not always its raw tag: a [BOT] echo of a map
+// event is filed under Map, the in-game admin's own chat under Chat, and so on. The chip shows the
+// owning tab (whispers: their kind); the raw tag stays in the hover title.
+function actChipLabel(line,tag,cat){
+  try{
+    if(cat==='pm'){const k=PM_KINDS.find(x=>x[0]===pmKind(actParts(line).body));return 'PM · '+(k?k[2]:'');}
+    const lbl=ACT_CAT_LABEL[cat];
+    return (lbl&&lbl.toUpperCase()!==String(tag).toUpperCase())?lbl:tag;
+  }catch(e){return tag;}
+}
+function catCol(cat){const c=ACT_CATS.find(x=>x[0]===cat);return tagCol(c?c[3]:'INFO');}
+// ── filter state ────────────────────────────────────────────────────────────────
+function _loadFlags(key,keys){const d={};keys.forEach(k=>d[k]=true);   // default ALL on (fail-open)
+  try{const s=JSON.parse(localStorage.getItem(key)||'{}');if(s&&typeof s==='object')keys.forEach(k=>{if(s[k]===false)d[k]=false;});}catch(e){}
+  return d;}
+let actFilter=_loadFlags('nocc_actfilter',ACT_CATS.map(c=>c[0]));
+let pmFilter=_loadFlags('nocc_pmfilter',PM_KINDS.map(c=>c[0]));
+function saveActFilter(){try{localStorage.setItem('nocc_actfilter',JSON.stringify(actFilter));localStorage.setItem('nocc_pmfilter',JSON.stringify(pmFilter));}catch(e){}}
+function actShown(line){const c=actCat(line);if(c===null)return false;if(c==='day')return true;
+  if(actFilter[c]===false)return false;
+  if(c==='pm'&&pmFilter[pmKind(actParts(line).body)]===false)return false;
+  return true;}
+function toggleActCat(k){actFilter[k]=!actFilter[k];saveActFilter();buildActFilterBar();renderActivity();}
+function togglePmKind(k){pmFilter[k]=!pmFilter[k];if(PM_KINDS.some(x=>pmFilter[x[0]]!==false))actFilter.pm=true;
+  saveActFilter();buildActFilterBar();renderActivity();openPmMenu();}
+// "All" master chip: one click turns every category (and whisper kind) back on (it never hides anything).
+// Lit only while everything is on, so it doubles as an "am I filtering right now?" indicator.
+function actAllOn(){return ACT_CATS.every(([k])=>actFilter[k]!==false)&&PM_KINDS.every(([k])=>pmFilter[k]!==false);}
+function showAllActCats(){if(actAllOn())return;ACT_CATS.forEach(([k])=>actFilter[k]=true);PM_KINDS.forEach(([k])=>pmFilter[k]=true);
+  saveActFilter();buildActFilterBar();renderActivity();}
+function _chipPaint(b,on,col){b.classList.toggle('on',on);
+  if(on){b.style.color=col;b.style.borderColor=col+'66';b.style.background=col+'1f';}
+  else{b.style.color='';b.style.borderColor='';b.style.background='';}}
 function buildActFilterBar(){const bar=$('#actFilterBar');if(!bar)return;bar.innerHTML='';
-  const a=document.createElement('span');a.className='afc'+(actAllOn()?' on':'');
+  const a=document.createElement('span');a.className='afc';
   a.setAttribute('data-k','__all');a.textContent='All';
-  a.title='All — show every category (turns every toggle back on).';
+  a.title='All — show every category and every kind of whisper (turns every toggle back on).';
   a.setAttribute('role','button');a.setAttribute('tabindex','0');a.setAttribute('data-kbd','1');
   a.setAttribute('aria-pressed',actAllOn()?'true':'false');a.setAttribute('aria-label','Show all activity categories');
-  a.onclick=showAllActCats;bar.appendChild(a);
-  ACT_CATS.forEach(([k,label,desc])=>{const b=document.createElement('span');b.className='afc'+(actFilter[k]?' on':'');
-    b.setAttribute('data-k',k);b.textContent=label;b.title=label+' — '+(desc||'')+'\nClick to show/hide.';
+  _chipPaint(a,actAllOn(),tagCol('OK'));a.onclick=showAllActCats;bar.appendChild(a);
+  ACT_CATS.forEach(([k,label,desc])=>{const b=document.createElement('span');b.className='afc';
+    const on=actFilter[k]!==false;
+    let txt=label;
+    if(k==='pm'){const n=PM_KINDS.filter(x=>pmFilter[x[0]]!==false).length;if(on&&n<PM_KINDS.length)txt+=' '+n+'/'+PM_KINDS.length;}
+    b.setAttribute('data-k',k);b.textContent=txt;b.title=label+' — '+(desc||'')+'\nClick to show/hide.';
     b.setAttribute('role','switch');b.setAttribute('tabindex','0');b.setAttribute('data-kbd','1');
-    b.setAttribute('aria-checked',actFilter[k]?'true':'false');b.setAttribute('aria-label','Show '+label+' lines');
-    b.onclick=()=>toggleActCat(k);bar.appendChild(b);});}
-function renderActivity(lines){
-  if(!lines.length){if(actSig!=='__empty__'){actSig='__empty__';$('#activity').innerHTML='<div class="ln dim" style="cursor:default">No recent activity.</div>';}return;}
-  // one pass: classify (null = duplicate [BOT] echo — never rendered here), then apply the
-  // per-operator category filter. Dropped lines stay out of the dedup
-  // signature too, so the feed never re-renders just because a duplicate arrived.
-  lines=lines.filter(ln=>{const c=actCat(ln);return c!==null&&actFilter[c]!==false;});
-  if(!lines.length){if(actSig!=='__filtered__'){actSig='__filtered__';$('#activity').innerHTML='<div class="ln dim" style="cursor:default">No activity in the selected categories.</div>';}return;}
-  const sig=lines.join('');if(sig===actSig)return;actSig=sig;
-  const el=$('#activity'),c=el.parentElement,was=nearBottom(c),fromBottom=c.scrollHeight-c.scrollTop;el.innerHTML='';
-  for(const ln of lines){const m=ln.match(/^(\d\d:\d\d:\d\d [AP]M)\s\s(.*)$/);let ts='',body=ln;if(m){ts=m[1];body=m[2];}
-    const p=actParts(ln);const tag=p.tag;const col=tagCol(tag);let rest=p.body;
-    // FULL lines by owner request: no client-side shortening — the [JOIN] rank+points parenthetical
-    // used to be stripped here; every line body now renders exactly as logged (wraps, never clips).
-    const d=document.createElement('div');d.className='ln';d.title=(tag?('['+tag+'] \u2014 '):'')+'click to copy';d.onclick=()=>{if(hasSelection())return;copyLine(ln);};
-    let html=ts?`<span class="ts">${ts}</span>`:'';
-    if(tag&&TAGCOL[tag]) html+=`<span class="chip" style="color:${col};background:${chipBg(col)}">${esc(actChipLabel(ln,tag))}</span><span style="color:${col}">${esc(rest.trim())}</span>`;
-    else html+=`<span style="color:${col}">${esc(body)}</span>`;
-    d.innerHTML=html;el.appendChild(d);}
+    b.setAttribute('aria-checked',on?'true':'false');b.setAttribute('aria-label','Show '+label+' lines');
+    _chipPaint(b,on,catCol(k));b.onclick=()=>toggleActCat(k);bar.appendChild(b);
+    if(k==='pm'){const d=document.createElement('span');d.className='afc';d.textContent='▾';d.id='pmMenuBtn';
+      d.title='Pick which kinds of whisper to show';d.setAttribute('role','button');d.setAttribute('tabindex','0');
+      d.setAttribute('data-kbd','1');d.setAttribute('aria-haspopup','true');d.setAttribute('aria-label','Whisper kinds');
+      _chipPaint(d,on,catCol('pm'));d.style.marginLeft='-3px';d.onclick=(e)=>{e.stopPropagation();openPmMenu(true);};bar.appendChild(d);}});}
+// whisper kinds menu: a small popover (fixed, so the card's overflow can't clip it)
+let _pmMenuEl=null;
+function closePmMenu(){if(_pmMenuEl){_pmMenuEl.remove();_pmMenuEl=null;}}
+function openPmMenu(toggle){
+  if(toggle&&_pmMenuEl){closePmMenu();return;}
+  const btn=$('#pmMenuBtn');if(!btn){closePmMenu();return;}
+  const keep=!!_pmMenuEl;closePmMenu();if(!toggle&&!keep)return;
+  const m=document.createElement('div');_pmMenuEl=m;m.setAttribute('role','menu');m.setAttribute('aria-label','Whisper kinds');
+  m.style.cssText='position:fixed;z-index:95;background:var(--modal);color:var(--txt);border:1px solid var(--bd);border-radius:9px;padding:5px;box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:12px';
+  PM_KINDS.forEach(([k,label,,desc])=>{const on=pmFilter[k]!==false;const it=document.createElement('div');
+    it.setAttribute('role','menuitemcheckbox');it.setAttribute('aria-checked',on?'true':'false');it.tabIndex=0;
+    it.style.cssText='padding:6px 10px;cursor:pointer;border-radius:6px;white-space:nowrap';
+    it.innerHTML='<span style="display:inline-block;width:18px">'+(on?'☑':'☐')+'</span>'+esc(label);it.title=desc;
+    it.onmouseenter=()=>it.style.background='var(--hover)';it.onmouseleave=()=>it.style.background='';
+    it.onclick=(e)=>{e.stopPropagation();togglePmKind(k);};
+    it.onkeydown=(e)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();togglePmKind(k);}};
+    m.appendChild(it);});
+  document.body.appendChild(m);
+  const r=btn.getBoundingClientRect();
+  m.style.left=Math.max(6,Math.min(r.left,window.innerWidth-m.offsetWidth-6))+'px';
+  m.style.top=Math.min(r.bottom+5,window.innerHeight-m.offsetHeight-6)+'px';}
+document.addEventListener('click',e=>{if(_pmMenuEl&&!_pmMenuEl.contains(e.target))closePmMenu();});
+// ── rank tags for player names (chat, join, leave) ─────────────────────────────────────────────────────
+// cc_web sends {name: [label, colour, title]} with every batch of lines: the same tag and colour the Players table
+// shows. Light theme: a very light rank colour (Air Marshal's pale grey) is darkened so it stays readable.
+let actNames={};
+function rkColor(hex){
+  if(!/^#[0-9a-fA-F]{6}$/.test(hex||''))return 'var(--txt)';
+  if(document.documentElement.getAttribute('data-theme')!=='light')return hex;
+  const n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;
+  const lum=(0.2126*r+0.7152*g+0.0722*b)/255;
+  if(lum<0.55)return hex;
+  const f=0.55/lum;const h2=v=>Math.round(v*f).toString(16).padStart(2,'0');
+  return '#'+h2(r)+h2(g)+h2(b);}
+const ACT_NAME_RX={CHAT:/^(.+?): /,JOIN:/^(.+?) joined\b/,LEFT:/^(.+?) left\b/};
+function actBodyHTML(tag,body,col){
+  const rx=ACT_NAME_RX[tag];
+  if(rx){const m=body.match(rx);
+    if(m){const nm=m[1].trim(),info=actNames[nm];
+      if(info&&info[0]){
+        let rest=body.slice(m[1].length);
+        if(tag==='JOIN')rest=rest.replace(/\(\[[^\]]+\]\s/,'(');   // the tag now leads the line; don't print it twice
+        return '<span class="rkn" style="color:'+rkColor(info[1])+'" title="'+esc(info[2]||'')+'">['+esc(info[0])+'] '+esc(nm)+'</span>'
+          +'<span style="color:'+col+'">'+esc(rest)+'</span>';}}}
+  return '<span style="color:'+col+'">'+esc(body)+'</span>';}
+// ── one feed row ────────────────────────────────────────────────────────────────────────────────────────
+function actRow(ln){
+  const p=actParts(ln);const tag=p.tag;const cat=actCat(ln);
+  const d=document.createElement('div');
+  if(cat==='day'){d.className='ln day';d.textContent=p.body.trim();return d;}
+  const m=ln.match(/^(\d\d:\d\d:\d\d [AP]M)\s\s(.*)$/);let ts='',body=ln;if(m){ts=m[1];body=m[2];}
+  const col=(cat==='rank'||cat==='map')?catCol(cat):tagCol(tag);   // Ranks / Map lines wear their category colour
+  d.className='ln';d.title=(tag?('['+tag+'] \u2014 '):'')+'click to copy';d.onclick=()=>{if(hasSelection())return;copyLine(ln);};
+  let html=ts?`<span class="ts">${ts}</span>`:'';
+  if(tag&&TAGCOL[tag]){const cc=(cat==='rank'||cat==='map')?col:tagCol(tag);
+    html+=`<span class="chip" style="color:${cc};background:${chipBg(cc)}">${esc(actChipLabel(ln,tag,cat))}</span>`+actBodyHTML(tag,p.body.trim(),col);}
+  else html+=`<span style="color:${col}">${esc(body)}</span>`;
+  d.innerHTML=html;return d;}
+// ── the feed: a longer history, paged on scroll-up (1.9.4, owner: "a lot longer than it is now") ───────────
+// The browser keeps every line it has seen this session, keyed by its byte offset in activity.log (so the 2/s live
+// tail and the older pages from /api/loghist merge without gaps or doubles). New lines are appended, older pages
+// prepended, and only a filter/theme change rebuilds the whole list.
+const ACT_MAX=20000;                     // lines kept in the browser (about a week on the busier server)
+let actStore=[],actGen=null,actOldest=null,actDone=false,actLoading=false,actLastDay=null;
+function _actEl(){return $('#activity');}
+function _actBox(){const el=_actEl();return el?el.parentElement:null;}
+function actTopText(){const t=$('#actTop');if(!t)return;
+  t.textContent=!actStore.length?'':actLoading?'loading older lines…':actDone?'start of the log':(actStore.length>=ACT_MAX?'(older lines: reload the page to go further back)':'↑ scroll up for older lines');}
+function actEmptyNote(){const el=_actEl();if(!el)return;
+  if(!actStore.length){el.innerHTML='<div class="ln dim" style="cursor:default">No recent activity.</div>';return true;}
+  if(!el.querySelector('.ln:not(.dim)')&&!el.querySelector('.ln.day')){el.innerHTML='<div class="ln dim" style="cursor:default">No activity in the selected categories.</div>';return true;}
+  return false;}
+function renderActivity(){                 // full rebuild from the store (filter or theme change)
+  const el=_actEl(),c=_actBox();if(!el||!c)return;
+  const was=nearBottom(c),fromBottom=c.scrollHeight-c.scrollTop;
+  const frag=document.createDocumentFragment();let lastDay=null;
+  for(const it of actStore){if(!actShown(it.t))continue;
+    if(actCat(it.t)==='day'){const dt=actParts(it.t).body.trim();if(dt===lastDay)continue;lastDay=dt;}
+    frag.appendChild(actRow(it.t));}
+  el.innerHTML='';el.appendChild(frag);actLastDay=lastDay;
+  actEmptyNote();actTopText();pin(c,was,fromBottom);}
+function _actAppend(items){const el=_actEl(),c=_actBox();if(!el||!c)return;
+  const was=nearBottom(c),fromBottom=c.scrollHeight-c.scrollTop;
+  if(el.firstChild&&el.firstChild.classList&&el.firstChild.classList.contains('dim'))el.innerHTML='';
+  for(const it of items){if(!actShown(it.t))continue;
+    if(actCat(it.t)==='day'){const dt=actParts(it.t).body.trim();if(dt===actLastDay)continue;actLastDay=dt;}
+    el.appendChild(actRow(it.t));}
+  if(!el.children.length)actEmptyNote();
   pin(c,was,fromBottom);}
-function renderConsole(items){
-  if(!items.length){if(conSig!=='__empty__'){conSig='__empty__';$('#con').innerHTML='<div class="ln dim" style="cursor:default">No console output.</div>';}return;}const sig=items.map(it=>it.k+it.t).join('');if(sig===conSig)return;conSig=sig;
-  const el=$('#con'),c=el.parentElement,was=nearBottom(c),fromBottom=c.scrollHeight-c.scrollTop;el.innerHTML='';
-  for(const it of items){const d=document.createElement('div');d.className='ln '+(it.k||'show');d.textContent=it.t;
-    if(it.k==='sum'){d.style.cursor='default';}
-    else{d.title='click for options';d.onclick=(e)=>{if(hasSelection())return;showLineMenu(e,it.t);};}
-    el.appendChild(d);}
-  pin(c,was,fromBottom);}
+function _actReset(gen){actStore=[];actGen=gen;actOldest=null;actDone=false;actLastDay=null;}
+// live tail from /api/state: lines + their offsets + the file identity
+let actIngesting=false,_actLegacySig='';
+async function actIngestLive(lines,offs,gen,names){
+  if(names)Object.assign(actNames,names);
+  if(!Array.isArray(lines))return;
+  if(!Array.isArray(offs)||offs.length!==lines.length){   // an older cc_web (no offsets): plain live tail, no history
+    const sig=lines.join('\n');if(sig===_actLegacySig)return;_actLegacySig=sig;
+    actStore=lines.map((t,i)=>({o:i,t:t}));actGen=null;actDone=true;renderActivity();return;}
+  if(actIngesting)return;                                  // a gap fill is still running; the next poll catches up
+  actIngesting=true;
+  try{
+    if(gen!==actGen){_actReset(gen);}
+    const items=lines.map((t,i)=>({o:offs[i],t:t}));
+    if(!actStore.length){actStore=items;actOldest=items.length?items[0].o:0;actDone=actOldest<=0;renderActivity();return;}
+    const last=actStore[actStore.length-1].o;
+    const fresh=items.filter(it=>it.o>last);
+    if(!fresh.length)return;
+    if(items[0].o>last&&!items.some(it=>it.o===last)){      // lines arrived faster than we polled (a hidden tab): fill the gap
+      let gap=null;try{gap=await actFetch(items[0].o,last);}catch(e){gap=null;}
+      if(gen!==actGen)return;
+      if(gap===null){_actReset(gen);actStore=items;actOldest=items[0].o;renderActivity();return;}
+      fresh.unshift(...gap.filter(it=>it.o>last));}
+    actStore.push(...fresh);
+    if(actStore.length>ACT_MAX){actStore=actStore.slice(-ACT_MAX);actOldest=actStore[0].o;actDone=false;renderActivity();return;}
+    _actAppend(fresh);
+  }finally{actIngesting=false;}}
+// lines that END at `before`, back to (not including) `stopAt`; null = the file changed underneath
+async function actFetch(before,stopAt){
+  let out=[],b=before;
+  for(let i=0;i<10;i++){
+    const r=await jget('/api/loghist?log=activity&n=500&before='+b+'&gen='+encodeURIComponent(actGen||''));
+    if(!r||!r.ok||r.reset)return null;
+    if(r.names)Object.assign(actNames,r.names);
+    const page=(r.lines||[]).map((t,j)=>({o:(r.offs||[])[j],t:t}));
+    out=page.filter(it=>it.o>stopAt).concat(out);
+    if(page.length&&page[0].o<=stopAt)break;
+    if(r.done||!page.length)break;
+    b=r.from;}
+  return out;}
+async function actLoadOlder(){
+  if(actLoading||actDone||!actStore.length||actStore.length>=ACT_MAX)return;
+  actLoading=true;actTopText();
+  const askGen=actGen;
+  try{
+    const r=await jget('/api/loghist?log=activity&n=500&before='+actOldest+'&gen='+encodeURIComponent(actGen||''));
+    if(!r||!r.ok||askGen!==actGen)return;                   // the file changed while we waited: drop this page
+    if(r.reset){_actReset(r.gen);renderActivity();return;}
+    if(r.names)Object.assign(actNames,r.names);
+    const page=(r.lines||[]).map((t,j)=>({o:(r.offs||[])[j],t:t})).filter(it=>it.o<actOldest);
+    actDone=!!r.done;actOldest=Math.min(actOldest,r.from);
+    if(!page.length)return;
+    actStore=page.concat(actStore);
+    const el=_actEl(),c=_actBox();if(!el||!c)return;
+    const h0=c.scrollHeight,top0=c.scrollTop;
+    const frag=document.createDocumentFragment();let lastDay=null;
+    for(const it of page){if(!actShown(it.t))continue;
+      if(actCat(it.t)==='day'){const dt=actParts(it.t).body.trim();if(dt===lastDay)continue;lastDay=dt;}
+      frag.appendChild(actRow(it.t));}
+    const firstEl=el.firstChild;
+    if(firstEl&&firstEl.classList&&firstEl.classList.contains('day')&&lastDay&&firstEl.textContent===lastDay)firstEl.remove();
+    if(firstEl&&firstEl.classList&&firstEl.classList.contains('dim'))el.innerHTML='';
+    el.insertBefore(frag,el.firstChild);
+    c.scrollTop=top0+(c.scrollHeight-h0);          // keep what the operator was reading in place
+  }catch(e){}
+  finally{actLoading=false;actTopText();}}
+(function(){const c=_actBox();if(c)c.addEventListener('scroll',()=>{if(c.scrollTop<60)actLoadOlder();},{passive:true});})();
+
+// ── console (1.9.4: its own popup + a long, timestamped history) ─────────────────────────────────────────
+// The filtered view pages console_history.log (cc_web keeps the readable lines there with the time they arrived);
+// raw mode pages the raw mirror. Rendered only while the popup is open; kept up to date either way.
+const CON_MAX=20000;
+let conStore=[],conGen=null,conOldest=null,conDone=false,conLoading=false,conLastDay=null,conSum='',conMode=null;
+function conOpen(){const p=$('#console');return !!(p&&p.classList.contains('on'));}
+function conReset(){conStore=[];conGen=null;conOldest=null;conDone=false;conLastDay=null;conSig='';if(conOpen())renderConsoleFull();}
+function _conRow(it){const d=document.createElement('div');
+  if(it.k==='day'){d.className='ln day';d.textContent=it.t;return d;}
+  d.className='ln '+(it.k||'show');
+  if(it.ts){const s=document.createElement('span');s.className='ts';s.textContent=it.ts;d.appendChild(s);}
+  d.appendChild(document.createTextNode(it.t));
+  d.title='click for options';d.onclick=(e)=>{if(hasSelection())return;showLineMenu(e,it.t);};
+  return d;}
+function conTopText(){const t=$('#conTop');if(!t)return;
+  t.textContent=!conStore.length?'':conLoading?'loading older lines…':conDone?'start of the log':(conStore.length>=CON_MAX?'(reload the page to go further back)':'↑ scroll up for older lines');
+  const i=$('#conInfo');if(i)i.textContent=conSum;}
+function renderConsoleFull(){const el=$('#con');if(!el)return;const c=el.parentElement;
+  if(!conStore.length){el.innerHTML='<div class="ln dim" style="cursor:default">No console output.</div>';conTopText();return;}
+  const frag=document.createDocumentFragment();let lastDay=null;
+  for(const it of conStore){if(it.k==='day'){if(it.t===lastDay)continue;lastDay=it.t;}frag.appendChild(_conRow(it));}
+  el.innerHTML='';el.appendChild(frag);conLastDay=lastDay;conTopText();c.scrollTop=c.scrollHeight;}
+function renderConsole(items,gen,mode){
+  items=items||[];
+  const sum=items.length&&items[items.length-1].k==='sum'?items.pop():null;
+  conSum=sum?String(sum.t).replace(/^—\s*|\s*—$/g,''):'';
+  if(gen!==conGen||mode!==conMode){conStore=[];conGen=gen;conMode=mode;conOldest=null;conDone=false;conLastDay=null;}
+  const its=items.filter(it=>typeof it.o==='number');
+  let fresh;
+  if(!conStore.length){fresh=its;conStore=its.slice();conOldest=its.length?its[0].o:0;conDone=conOldest<=0;
+    if(conOpen())renderConsoleFull();return;}
+  const last=conStore[conStore.length-1].o;
+  fresh=its.filter(it=>it.o>last);
+  if(!fresh.length){conTopText();return;}
+  conStore.push(...fresh);
+  if(conStore.length>CON_MAX){conStore=conStore.slice(-CON_MAX);conOldest=conStore[0].o;conDone=false;if(conOpen())renderConsoleFull();return;}
+  if(!conOpen())return;
+  const el=$('#con'),c=el.parentElement,was=nearBottom(c),fromBottom=c.scrollHeight-c.scrollTop;
+  if(el.firstChild&&el.firstChild.classList&&el.firstChild.classList.contains('dim'))el.innerHTML='';
+  for(const it of fresh){if(it.k==='day'){if(it.t===conLastDay)continue;conLastDay=it.t;}el.appendChild(_conRow(it));}
+  conTopText();pin(c,was,fromBottom);}
+async function conLoadOlder(){
+  if(conLoading||conDone||!conStore.length||conStore.length>=CON_MAX)return;
+  conLoading=true;conTopText();
+  const askGen=conGen;
+  try{
+    const r=await jget('/api/loghist?log=console&n=500&before='+conOldest+'&gen='+encodeURIComponent(conGen||'')+(rawConsole?'&raw=1':''));
+    if(!r||!r.ok||askGen!==conGen)return;
+    if(r.reset){conReset();return;}
+    const page=(r.items||[]).filter(it=>typeof it.o==='number'&&it.o<conOldest);
+    conDone=!!r.done;conOldest=Math.min(conOldest,r.from);
+    if(!page.length)return;
+    conStore=page.concat(conStore);
+    const el=$('#con'),c=el.parentElement,h0=c.scrollHeight,top0=c.scrollTop;
+    const frag=document.createDocumentFragment();let lastDay=null;
+    for(const it of page){if(it.k==='day'){if(it.t===lastDay)continue;lastDay=it.t;}frag.appendChild(_conRow(it));}
+    const firstEl=el.firstChild;
+    if(firstEl&&firstEl.classList&&firstEl.classList.contains('day')&&lastDay&&firstEl.textContent===lastDay)firstEl.remove();
+    el.insertBefore(frag,el.firstChild);
+    c.scrollTop=top0+(c.scrollHeight-h0);
+  }catch(e){}
+  finally{conLoading=false;conTopText();}}
+(function(){const c=$('#conBody');if(c)c.addEventListener('scroll',()=>{if(c.scrollTop<60)conLoadOlder();},{passive:true});})();
+// popup open/close + drag (title bar) + remembered position and size
+function toggleConsole(force){const p=$('#console');if(!p)return;
+  const on=(typeof force==='boolean')?force:!p.classList.contains('on');
+  p.classList.toggle('on',on);p.setAttribute('aria-hidden',on?'false':'true');
+  const b=$('#conBtn');if(b)b.setAttribute('aria-pressed',on?'true':'false');
+  try{localStorage.setItem('nocc_conopen',on?'1':'0');}catch(e){}
+  if(on){_conRestoreBox();renderConsoleFull();}}
+function _conSaveBox(){const p=$('#console');if(!p||!p.classList.contains('on'))return;
+  const r=p.getBoundingClientRect();try{localStorage.setItem('nocc_conbox',JSON.stringify({x:r.left,y:r.top,w:r.width,h:r.height}));}catch(e){}}
+function _conRestoreBox(){const p=$('#console');if(!p)return;let b=null;
+  try{b=JSON.parse(localStorage.getItem('nocc_conbox')||'null');}catch(e){b=null;}
+  if(!b)return;
+  const w=Math.min(Math.max(320,b.w|0),window.innerWidth-12),h=Math.min(Math.max(180,b.h|0),window.innerHeight-12);
+  p.style.width=w+'px';p.style.height=h+'px';
+  p.style.left=Math.min(Math.max(0,b.x|0),window.innerWidth-80)+'px';p.style.top=Math.min(Math.max(0,b.y|0),window.innerHeight-40)+'px';
+  p.style.right='auto';}
+(function(){const p=$('#console'),hd=$('#conHd');if(!p||!hd)return;let drag=null;
+  hd.addEventListener('mousedown',e=>{if(e.target.closest('button'))return;const r=p.getBoundingClientRect();
+    drag={dx:e.clientX-r.left,dy:e.clientY-r.top};e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    p.style.left=Math.min(Math.max(0,e.clientX-drag.dx),window.innerWidth-80)+'px';
+    p.style.top=Math.min(Math.max(0,e.clientY-drag.dy),window.innerHeight-40)+'px';p.style.right='auto';});
+  window.addEventListener('mouseup',()=>{if(drag){drag=null;_conSaveBox();}});
+  try{new ResizeObserver(()=>_conSaveBox()).observe(p);}catch(e){}
+  try{if(localStorage.getItem('nocc_conopen')==='1')setTimeout(()=>toggleConsole(true),0);}catch(e){}})();
 
 // console line context menu: Copy / "Filter messages like this"
 let lnMenuEl=null;
@@ -1375,14 +1958,14 @@ function showLineMenu(ev,text){
 }
 async function filterLike(text){
   const r=await jpost('/api/console-filter',{action:'add',pattern:text});
-  conSig='';   // force the console to re-render (the matching lines vanish)
+  conReset();  // the matching lines vanish: start the console history again with the filter applied
   out('<span class="dim">🚫 filtering messages like: '+esc(text.slice(0,70))+'…  ('+ (r.filters?r.filters.length:'?') +' custom filter(s))</span>');
 }
 async function openFilters(){
   const r=await jget('/api/console-filter');const f=(r&&r.filters)||[];
   if(!f.length){out('<span class="dim">No custom filters yet — left-click a console line → “Filter messages like this”.</span>');return;}
   if(confirm('Custom console filters ('+f.length+'):\n\n'+f.join('\n')+'\n\nClear ALL of them?')){
-    await jpost('/api/console-filter',{action:'clear'});conSig='';
+    await jpost('/api/console-filter',{action:'clear'});conReset();
     out('<span class="dim">cleared all custom console filters</span>');
   }
 }
@@ -1462,7 +2045,7 @@ function updateMapTitle(){
   else              el.textContent=_mapName||'';
 }
 async function tick(){const _g=(tick._gen=(tick._gen||0)+1);try{
-  const st=await jget('/api/state'+(rawConsole?'?raw=1':''));
+  const st=await jget('/api/state?acmi='+acmiSeq+(rawConsole?'&raw=1':''));
   if(_g!==tick._gen)return;   // a newer tick already painted — never let a slower, OLDER snapshot overwrite it
   // Stale gate with hysteresis. Bot main loop is single-threaded with blocking SFTP/RCMD
   // (connect timeouts 10–15s; watchdog has logged 30s+ stalls). Hard cut at 8s then 25s still
@@ -1540,37 +2123,51 @@ async function tick(){const _g=(tick._gen=(tick._gen||0)+1);try{
   if(st.server_config){serverConfig=st.server_config;if($('#srvOv').classList.contains('on'))renderServerCfg();}   // NO settle gate: _srvReconcile holds posted values per-field and turns bot truth into ✓/✗ badges — hiding the authoritative copy for 10s only delayed real confirmations
   const _safe=(f)=>{try{f();}catch(_e){console.error('tick render',_e);}};   // one panel throwing must not skip the rest of the tick or mislabel the server 'backend?'
   lastActivity=st.activity||[];
-  _safe(()=>drawMap(lastPlayers));_safe(()=>recordEntities(entities));_safe(()=>renderPlayers(lastPlayers));_safe(()=>renderAir(st.air));_safe(()=>renderFrametime(st));
+  _safe(()=>acmiIngest(st.acmi));_safe(()=>drawMap(lastPlayers));_safe(()=>recordEntities(entities));_safe(()=>renderPlayers(lastPlayers));_safe(()=>renderAir(st.air));_safe(()=>renderFrametime(st));
   _safe(()=>renderFsPlayers(lastPlayers));
-  _safe(()=>renderActivity(lastActivity));_safe(()=>renderConsole(st.console||[]));_safe(()=>renderDeploy(st.deploy,st.plugin_version));
+  _safe(()=>{actIngestLive(lastActivity,st.act_offs,st.act_gen,st.act_names).catch(()=>{});});
+  _safe(()=>renderConsole(st.console||[],st.con_gen,rawConsole));_safe(()=>renderDeploy(st.deploy,st.plugin_version,st.plugin_display));
+  if(st.tk_watch){tkWatch=st.tk_watch;} if($('#repOv').classList.contains('on'))_safe(renderTkWatch);
   if(!window.__actFilterBuilt){window.__actFilterBuilt=1;try{buildActFilterBar();}catch(e){}}   // build the filter chips once
 }catch(e){$('#srv').innerHTML='<span class="dot" style="background:#FF5C5C"></span>backend?';}}
 
 // staged plugin update: header badge + the Schedule-modal status box
 let lastDeploy=null;
-function renderDeploy(d,liveVer){
-  lastDeploy=d||null;
-  // FIX 1: prefer the LIVE plugin version the bot surfaces (from the "NukeStats <ver> loaded" line, else
-  // deployed_plugin.json); fall back to the deploy record. So the header shows the actually-running build.
-  const pv=$('#plugv');const ver=(liveVer||(d&&d.deployed_version)||'');if(pv)pv.textContent=ver?('v'+ver):'—';
+function pluginVersionSummary(info){
+  const i=info||{},observed=String(i.observed_version||''),recorded=String(i.deployed_version||'');
+  const mismatch=!!(observed&&recorded&&observed!==recorded),stale=!!i.observed_is_stale;
+  if(mismatch)return {label:'v'+observed+' ≠ recorded v'+recorded,detail:'Version mismatch: the bot report and deployment record disagree'+(stale?' (bot report is stale).':'.'),warning:true,mismatch:true};
+  if(observed)return {label:'v'+observed+(stale?' (last known)':''),detail:(recorded?'Bot report and deployment record agree.':'Bot-reported version; deployment record unavailable.')+(stale?' Bot report is stale.':''),warning:stale,mismatch:false};
+  if(recorded)return {label:'v'+recorded+' (recorded)',detail:'Deployment record only; bot-reported version unavailable.',warning:true,mismatch:false};
+  return {label:'unknown',detail:'No plugin version evidence is available.',warning:true,mismatch:false};
+}
+function renderDeploy(d,liveVer,display){
+  const info=display||{observed_version:liveVer,deployed_version:d&&d.deployed_version};
+  lastDeploy=Object.assign({},d||{},{plugin_display:info});
+  const summary=pluginVersionSummary(info),pv=$('#plugv');
+  if(pv){pv.textContent=summary.label;pv.title=summary.detail;pv.style.color=summary.warning?'var(--warn)':'';}
   const badge=$('#updBadge');
   if(badge){
     if(d&&d.staged&&d.new){
       const v=d.version?('v'+d.version):(d.sha||'staged');
-      badge.innerHTML=`<span class="pulse"></span>Plugin update staged: ${esc(v)}`;
+      const ready=d.ready===true&&d.meta_ok===true&&!summary.mismatch;
+      badge.innerHTML=`<span class="pulse"></span>Plugin staged${ready?'':' (verification needed)'}: ${esc(v)}`;
       badge.style.display='inline-flex';
     }else badge.style.display='none';
   }
-  paintStaged(d);
+  paintStaged(lastDeploy);
 }
 function paintStaged(d){
   const box=$('#schStaged');if(!box)return;
-  const live=(d&&d.deployed_version)?('NukeStats v'+esc(d.deployed_version)):'unknown';
-  const liveHdr=`<div class="meta" style="margin-bottom:5px">● Live: <b style="color:#9fe6c0">${live}</b>${(d&&d.deployed_at)?(' · since '+esc(d.deployed_at)):''}</div>`;
+  const summary=pluginVersionSummary(d&&d.plugin_display||{deployed_version:d&&d.deployed_version});
+  const liveHdr=`<div class="meta" style="margin-bottom:5px">Plugin: <b style="color:${summary.warning?'var(--warn)':'#9fe6c0'}">${esc(summary.label)}</b><br>${esc(summary.detail)}${(d&&d.deployed_at)?(' · recorded '+esc(d.deployed_at)):''}</div>`;
   if(!d||!d.staged){box.className='stbox';box.innerHTML=liveHdr+'<div class="h">No plugin update staged</div>'
     +'<div class="nt">Nothing is waiting to deploy. An <b>Update</b> action would just re-bounce the live plugin.</div>';return;}
-  if(!d.new){box.className='stbox';box.innerHTML=liveHdr+'<div class="h">Staged plugin already live</div>'
-    +`<div class="nt">The staged file matches the deployed plugin (sha <code>${esc(d.sha||'')}</code>) — nothing new to deploy.</div>`;return;}
+  if(d.meta_ok!==true||summary.mismatch||d.readiness_error){box.className='stbox on';box.innerHTML=liveHdr+'<div class="h">⚠ Staged update needs verification</div>'
+    +`<div class="nt">${esc(d.readiness_error||'Staged metadata is missing or does not match the full plugin SHA256.')}</div>`;return;}
+  if(!d.new){box.className='stbox';box.innerHTML=liveHdr+'<div class="h">Staged file matches deployment record</div>'
+    +`<div class="nt">The complete staged and recorded SHA256 values match (sha <code>${esc(d.sha||'')}</code>).</div>`;return;}
+  if(d.ready!==true){box.className='stbox on';box.innerHTML=liveHdr+'<div class="h">⚠ Staged update needs verification</div>';return;}
   const kb=d.size?Math.round(d.size/1024)+' KB':'';
   const v=d.version?('NukeStats v'+esc(d.version)):'plugin';
   box.className='stbox on';
@@ -1816,6 +2413,7 @@ function renderUpdates(){
   const el=$('#updBody'); if(!el)return;
   const t=toolkitInfo||{}; const chk=t.check||null;
   const ver=t.toolkit_version?('v'+esc(t.toolkit_version)):'<span class="dim">not installed via the toolkit (dev build)</span>';
+  const plugin=pluginVersionSummary(t.plugin_display||{deployed_version:t.plugin_version});
   let badge='<span class="dim">not checked yet</span>';
   if(chk){
     if(chk.newer===true) badge='<span style="color:var(--warn);font-weight:700">⬆ Update available: '+esc(chk.latest||'?')+'</span>'
@@ -1825,7 +2423,8 @@ function renderUpdates(){
   }
   el.innerHTML='<div style="display:flex;flex-direction:column;gap:14px">'
     +'<div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Installed</div>'
-      +'<div style="font-size:15px;font-weight:700">Plugin '+(t.plugin_version?('v'+esc(t.plugin_version)):ver)+'</div></div>'
+      +'<div style="font-size:15px;font-weight:700;color:'+(plugin.warning?'var(--warn)':'inherit')+'">Plugin '+esc(plugin.label)+'</div>'
+      +'<div class="dim" style="font-size:11px;margin-top:4px">'+esc(plugin.detail)+'</div></div>'
     +'<div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Update status</div>'
       +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
         +'<button class="sm" onclick="checkUpdates(this)">Check for updates</button><span>'+badge+'</span></div>'
@@ -1926,11 +2525,13 @@ document.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;c
 // Hiding a card re-balances its column's rows; hiding a whole column re-balances the main
 // grid columns — both via the --cols/--rows-* custom properties, so the <=900px mobile
 // media query (which sets grid-template-* directly) still wins on narrow screens.
+// 1.9.4: the console lives in its own popup (🖥 Console), so it is not
+// dashboard panel any more. Activity matches the Live Map's height and Command matches Players.
 const PANELS=[['map','🗺','Live Map'],['players','👥','Players'],
-              ['activity','📜','Activity'],['console','🖥','Console'],['command','⌨','Command']];
+              ['activity','📜','Activity'],['command','⌨','Command']];
 const PANEL_COLS=[
-  {sel:'.col.left', track:'minmax(330px,1.2fr)', rows:[['map','1.25fr'],['players','1fr']], varName:'--rows-left'},
-  {sel:'.col.right',track:'1.05fr',              rows:[['activity','1.15fr'],['console','auto'],['command','1.85fr']], varName:'--rows-right'}];
+  {sel:'.col.left', track:'minmax(330px,1.2fr)',  rows:[['map','minmax(0,1.25fr)'],['players','minmax(0,1fr)']], varName:'--rows-left'},
+  {sel:'.col.right',track:'minmax(300px,1.05fr)', rows:[['activity','minmax(0,1.25fr)'],['command','minmax(0,1fr)']], varName:'--rows-right'}];
 let panelHidden={};
 try{panelHidden=JSON.parse(localStorage.getItem('nocc_panels')||'{}')||{};}catch(e){panelHidden={};}
 function savePanels(){try{localStorage.setItem('nocc_panels',JSON.stringify(panelHidden));}catch(e){}}
@@ -2287,7 +2888,8 @@ function _votemapHtml(){
   // below 5s, so the map change is ALWAYS at least 5s after the vote (the derived post-mission delay = vote +
   // delay can never be shorter than the vote). Too-tight values refuse to apply (client + bot both reject).
   const _mvd=(c.map_vote_duration!=null?+c.map_vote_duration:30), _pvd=(c.post_vote_change_delay!=null?+c.post_vote_change_delay:15);
-  const _epmd=(c.effective_pmd!=null?+c.effective_pmd:(_mvd+_pvd));
+  const _vr=(c.enabled!==false&&c.vote_style==='two_round')?2:1;   // two rounds = two votes before the map changes
+  const _epmd=(c.effective_pmd!=null?+c.effective_pmd:(_mvd*_vr+_pvd));
   const moved='<div style="margin-top:9px;padding:9px 11px;border:1px solid var(--bd);border-radius:9px;background:var(--inset)">'
     +'<div style="font-size:12px;font-weight:600;margin-bottom:8px">⏱ Vote &amp; map-change timing</div>'
     +'<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;font-size:12px">'
@@ -2298,7 +2900,7 @@ function _votemapHtml(){
     +'</div>'
     +'<div style="margin-top:9px;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px">'
     +'⟹ New map loads <b style="color:var(--ac)" id="vtCombined">'+_epmd+'</b> s after the mission ends'
-    +' <span class="dim">= vote (<span id="vtVoteEcho">'+_mvd+'</span>) + delay (<span id="vtDelayEcho">'+_pvd+'</span>); always at least vote + 5</span></div>'
+    +' <span class="dim">= '+(_vr===2?'2 votes (2 × ':'vote (')+'<span id="vtVoteEcho">'+_mvd+'</span>) + delay (<span id="vtDelayEcho">'+_pvd+'</span>); always at least '+(_vr===2?'the votes':'vote')+' + 5</span></div>'
     +'<div id="vtMsg" style="font-size:11px;margin-top:6px;min-height:15px"><span class="dim">The delay is the gap after the vote — it can\'t go below 5s, so the map change is always at least 5s after the ballot closes.</span></div>'
     +'<div style="font-size:11px;margin-top:4px" class="dim">'+(fOn?'⚔ Force-PvP-heavy ballot at '+(+c.force_pvp_players||0)+'+ players':'Force-PvP-at-high-pop is off')+' — edit in ⚙ Game Settings → End of Match &amp; Votes</div>'
     +'</div>';
@@ -2336,7 +2938,10 @@ function _votemapHtml(){
   if(fOn && (+c.force_pvp_pvp||0)>pvEn) warns+='<div style="font-size:11px;margin-top:6px;color:#e2b35a">⚠ Force-PvP asks for '+(+c.force_pvp_pvp||0)+' PvP modes but only '+pvEn+' are enabled below — enable more built-ins or lower it in ⚙ Game Settings → End of Match &amp; Votes.</div>';
   const head='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px">'
     +'<div style="font-weight:700;font-size:12px">🗳 Votemap settings <span class="dim" style="font-weight:400;font-size:11px">— the in-game end-of-mission ballot</span></div>'
-    +'<span style="font-size:11px">Map voting '+tgl('enabled',vmOn)+'</span></div>';
+    +'<label style="font-size:11px">Map voting <select class="schin" onchange="setVoteMode(this.value)">'
+    +'<option value="two_round"'+(vmOn&&c.vote_style==='two_round'?' selected':'')+'>Two rounds</option>'
+    +'<option value="one_round"'+(vmOn&&c.vote_style!=='two_round'?' selected':'')+'>One round</option>'
+    +'<option value="off"'+(!vmOn?' selected':'')+'>Off</option></select></label></div>';
   const offNote=vmOn?'':'<div style="font-size:11px;margin:0 0 8px;color:#e2b35a">Map voting is OFF — at mission end the server rotation picks the next map (no vote, and !votemap is disabled).</div>';
   return '<div style="border:1px solid var(--bd);border-radius:10px;background:var(--inset);padding:10px 12px;margin-bottom:12px">'
     +head+offNote
@@ -2360,7 +2965,7 @@ function _votemapHtml(){
     +'<label class="msgfl">Built-in ops '+num('builtin_minutes',c.builtin_minutes==null?180:c.builtin_minutes,10,600)+' min</label>'
     +'<span class="dim">the bot sets this when it queues a map — give built-ins ~180 so a 2h default doesn\'t cut the timeout→vote short</span>'
     +'</div>'
-    +coopW+pvpW+guaranteed+bootMap+_vmAdvHtml(c)+moved
+    +coopW+pvpW+guaranteed+bootMap+_variantsHtml(c)+_vmAdvHtml(c)+moved
     +'<div class="muted" style="font-size:11px;margin-top:8px">Normal ballot: <b>'+cc+'</b> PvE + <b>'+pp+'</b> PvP = <b>'+tot+'</b> options.'
       +(fOn?' At <b>'+(+c.force_pvp_players||0)+'+</b> players: <b>'+(+c.force_pvp_coop||0)+'</b> PvE + <b>'+(c.include_pvp?(+c.force_pvp_pvp||0):0)+'</b> PvP.':'')
       +''+(c.pvp_mode==='family'?' In <b>Family-balanced</b> the PvP slots are shared evenly across Escalation / Terminal Control / (Carrier Duel + Domination), and each slot draws a DIFFERENT time-of-day variant from the User tab — so a 6-slot ballot comes out 2+2+2. ':' PvP modes are drawn from the built-in missions toggled ON below, so enabling more built-ins widens what the PvP slots pick from without growing the ballot. “Fixed pair” = always Escalation + Terminal Control. ')+'</div>'
@@ -2432,17 +3037,93 @@ function setVotemap(key, value){
   }
   jpost('/api/votemap',{key:key,value:value}).then(function(r){ if(r&&r.ok===false)showToast('Failed: '+(r.error||'?')); }).catch(function(){ showToast('Failed — is the bot running?'); });
 }
+// ── 1.9.0 map vote: two rounds / one round / off, and which missions are variants of which ──────────────────────
+// Two rounds: players vote on the mission first, then on its variant (time of day, weather, place - any missions you
+// mark as its variants here). A mission with no variants goes straight through. Saved as votemap_config "variants".
+let _varPick=null;   // {parent, picked:Set} while a mission's variants are being chosen, else null
+function setVoteMode(v){
+  if(v==='off'){ setVotemap('enabled',false); return; }
+  if(votemapCfg&&votemapCfg.enabled===false) setVotemap('enabled',true);
+  setVotemap('vote_style',v==='two_round'?'two_round':'one_round');
+}
+function _varLabels(){
+  const lab={}; ((votemapCfg&&votemapCfg.votable)||[]).forEach(function(m){ if(m&&m.name) lab[m.name]=m.label||m.name; });
+  return lab;
+}
+function editVariants(parent){
+  if(!parent){ _varPick=null; renderMissionPool(); return; }
+  const cur=((votemapCfg&&votemapCfg.variants)||{})[parent]||[];
+  _varPick={parent:parent, picked:new Set(cur)}; renderMissionPool();
+}
+function toggleVariant(name){
+  if(!_varPick) return;
+  if(_varPick.picked.has(name)) _varPick.picked.delete(name); else _varPick.picked.add(name);
+  renderMissionPool();
+}
+function saveVariants(){
+  if(!_varPick) return;
+  const all=Object.assign({}, (votemapCfg&&votemapCfg.variants)||{});
+  const kids=Array.from(_varPick.picked);
+  if(kids.length) all[_varPick.parent]=kids; else delete all[_varPick.parent];
+  _varPick=null; setVotemap('variants',all);
+}
+function removeVariants(parent){
+  const all=Object.assign({}, (votemapCfg&&votemapCfg.variants)||{});
+  delete all[parent]; if(_varPick&&_varPick.parent===parent) _varPick=null;
+  setVotemap('variants',all);
+}
+function _variantsHtml(c){
+  const vars=(c&&c.variants)||{}, two=(c.enabled!==false&&c.vote_style==='two_round');
+  const lab=_varLabels(), L=function(n){ return esc(lab[n]||n); };
+  const claimed=new Set(); Object.keys(vars).forEach(function(p){ (vars[p]||[]).forEach(function(k){ claimed.add(k); }); });
+  let rows='';
+  Object.keys(vars).sort(function(a,b){ return String(lab[a]||a).localeCompare(String(lab[b]||b)); }).forEach(function(p){
+    rows+='<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;margin-top:5px;font-size:12px">'
+      +'<b>'+L(p)+'</b><span class="dim">has</span><span>'+(vars[p]||[]).map(L).join(', ')+'</span>'
+      +'<button class="sm" data-n="'+esc(p)+'" onclick="editVariants(this.getAttribute(\'data-n\'))">edit</button>'
+      +'<button class="sm" data-n="'+esc(p)+'" onclick="removeVariants(this.getAttribute(\'data-n\'))">remove</button></div>';
+  });
+  if(!rows) rows='<div class="dim" style="font-size:11px;margin-top:5px">No mission has variants yet, so every mission goes straight through in one round.</div>';
+  const pool=((c&&c.votable)||[]).filter(function(m){ return m&&m.name; })
+    .sort(function(a,b){ return String(a.label||a.name).localeCompare(String(b.label||b.name)); });
+  let opts='<option value="">Pick a mission to give it variants…</option>';
+  pool.forEach(function(m){ if(!claimed.has(m.name)) opts+='<option value="'+esc(m.name)+'">'+esc(m.label||m.name)+'</option>'; });
+  let editor='';
+  if(_varPick){
+    const p=_varPick.parent;
+    let boxes='';
+    pool.forEach(function(m){
+      const n=m.name; if(n===p || vars[n] || (claimed.has(n) && !(vars[p]||[]).includes(n))) return;
+      const on=_varPick.picked.has(n);
+      boxes+='<label style="display:block;padding:2px 0;cursor:pointer;font-size:12px"><input type="checkbox"'+(on?' checked':'')
+        +' data-n="'+esc(n)+'" onchange="toggleVariant(this.getAttribute(\'data-n\'))"> '+esc(m.label||n)+'</label>';
+    });
+    if(!boxes) boxes='<div class="dim" style="font-size:11px">No other missions to pick from.</div>';
+    editor='<div style="border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin-top:8px">'
+      +'<div style="font-size:12px;margin-bottom:5px">Variants of <b>'+L(p)+'</b>: tick the missions that are this mission with a different time of day, weather or place.</div>'
+      +'<div style="max-height:220px;overflow:auto">'+boxes+'</div>'
+      +'<div style="display:flex;gap:8px;margin-top:7px"><button class="sm" onclick="saveVariants()">Save</button>'
+      +'<button class="sm" onclick="editVariants(\'\')">Cancel</button></div></div>';
+  }
+  return '<div style="border-top:1px solid var(--bd);margin-top:10px;padding-top:9px">'
+    +'<div style="font-weight:700;font-size:12px">Mission variants <span class="dim" style="font-weight:400;font-size:11px">— '
+    +(two?'used by the two-round vote: round 1 shows the mission, round 2 its variants':'only used when Map voting is set to Two rounds')+'</span></div>'
+    +rows
+    +'<div style="margin-top:7px"><select class="schin" onchange="if(this.value){editVariants(this.value);}">'+opts+'</select></div>'
+    +editor+'</div>';
+}
 // Live preview of the combined total as you type the two vote-timing knobs, plus an inline validity hint.
 function voteTimingPreview(){
   const ve=$('#vtVote'), de=$('#vtDelay'); if(!ve||!de) return;
   const v=Math.round(+ve.value||0), d=Math.round(+de.value||0);
-  const cb=$('#vtCombined'); if(cb) cb.textContent=(v+d);
+  const n=(votemapCfg&&votemapCfg.enabled!==false&&votemapCfg.vote_style==='two_round')?2:1;
+  const cb=$('#vtCombined'); if(cb) cb.textContent=(v*n+d);
   const ke=$('#vtVoteEcho'); if(ke) ke.textContent=v;
   const kd=$('#vtDelayEcho'); if(kd) kd.textContent=d;
   const msg=$('#vtMsg'); if(!msg) return;
   if(d<5) msg.innerHTML='<span class="er">✗ Delay must be at least 5s — this keeps the map change ≥5s after the vote closes. Won\'t apply.</span>';
   else if(v<10) msg.innerHTML='<span class="er">✗ Vote length must be at least 10s. Won\'t apply.</span>';
-  else msg.innerHTML='<span class="dim">Map changes '+(v+d)+'s after the mission ends — '+d+'s after the vote closes.</span>';
+  else msg.innerHTML='<span class="dim">Map changes '+(v*n+d)+'s after the mission ends — '+d+'s after the '+(n===2?'second':'')+(n===2?' vote':'vote')+' closes.</span>';
 }
 // Apply one vote-timing knob. Refuses (does NOT POST) a too-tight value and reverts the field, mirroring the
 // bot's own reject, so a value that would break the timing visibly never applies.
@@ -2460,7 +3141,8 @@ async function setVoteTiming(key,value){
   if(r&&r.ok){
     if(votemapCfg){
       if(key==='MAP_VOTE_DURATION') votemapCfg.map_vote_duration=v; else votemapCfg.post_vote_change_delay=v;
-      votemapCfg.effective_pmd=(+votemapCfg.map_vote_duration||0)+(+votemapCfg.post_vote_change_delay||0);
+      const _n=(votemapCfg.enabled!==false&&votemapCfg.vote_style==='two_round')?2:1;
+      votemapCfg.effective_pmd=(+votemapCfg.map_vote_duration||0)*_n+(+votemapCfg.post_vote_change_delay||0);
     }
     const tot=(votemapCfg&&votemapCfg.effective_pmd)||v;
     if(msg) msg.innerHTML='<span class="ok">✓ Saved — '+(key==='MAP_VOTE_DURATION'?'vote length':'map-change delay')+' = '+v+'s · map now loads '+tot+'s after the mission ends</span>';
@@ -2974,7 +3656,7 @@ function applyTheme(t){
   try{ if(typeof render==='function'&&atlas&&mapImg) render(); }catch(e){}   // re-tint map blips (vars changed)
   try{ paintLegend(); }catch(e){}
   actSig=''; fpSig=''; airSig='';            // force the colour-baked feeds to rebuild with the theme palette next tick
-  try{ renderActivity(lastActivity); }catch(e){}   // recolour immediately too
+  try{ buildActFilterBar(); renderActivity(); }catch(e){}   // recolour immediately too (chips wear category colours)
 }
 function toggleTheme(){
   const cur=document.documentElement.getAttribute('data-theme')==='light'?'light':'dark';
@@ -2985,11 +3667,20 @@ function toggleTheme(){
 
 // ── anti-grief reports tab ──────────────────────────────────────────────────────
 let serverReports=[];
+// 1.9.4 teamkill watch list: the bot keeps it (3 or more teamkill entries in the ban log, both servers counted) and
+// sends it to the plugin; shown here so the operator can see who is on it and why.
+let tkWatch=[],_tkWatchSig='';
+function renderTkWatch(){const box=$('#tkWatchBox');if(!box)return;
+  const sig=JSON.stringify(tkWatch||[]);if(sig===_tkWatchSig)return;_tkWatchSig=sig;
+  const head='<div class="h">🚩 Teamkill watch list <span class="dim" style="font-weight:400;font-size:11px">3 or more teamkill entries in the ban log, both servers counted</span></div>';
+  if(!tkWatch||!tkWatch.length){box.innerHTML=head+'<div class="nt">Nobody is on the watch list.</div>';return;}
+  box.innerHTML=head+'<div class="nt">'+tkWatch.map(r=>'<b>'+esc(r.name||'?')+'</b> <span class="dim">('+(r.count|0)+' teamkill entries)</span>').join(' &middot; ')+'</div>'
+    +'<div class="meta" style="font-family:inherit">Their first teamkill in a match is a kick with their rank set to 0 instead of the eject warning, the next one that match is a ban, and they get a warning when they join. Removing their entries from the ban log takes them off.</div>';}
 function updateRepBtn(){ const b=$('#repBtn'); if(!b)return;
   const n=(serverReports||[]).length;
   b.innerHTML='🛡 Moderation'+(n?(' <span style="background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:10px;font-weight:700">'+n+'</span>'):''); }
 let bannedPlayers=[];
-function openReports(){ $('#repOv').classList.add('on'); modTab('reports'); jpost('/api/banaudit',{}).catch(function(){}); }
+function openReports(){ $('#repOv').classList.add('on'); _tkWatchSig=''; renderTkWatch(); modTab('reports'); jpost('/api/banaudit',{}).catch(function(){}); }
 function modTab(name){
   const rep=name!=='banned';
   const rp=$('#repPane'), bp=$('#banPane'); if(rp)rp.style.display=rep?'':'none'; if(bp)bp.style.display=rep?'none':'';
@@ -3486,7 +4177,7 @@ function paKick(sid,name){
 function paBan(sid,name){if(!confirm('BAN '+name+'? (writes to ban list)'))return;closeOv();sendCmd('ban',[sid],{},`ban ${name}`);}
 function paCopy(sid,name){copyText(sid).then(function(ok){showToast(ok?('copied SteamID '+sid):('could not copy — select + Ctrl+C: '+sid));});closeOv();}
 
-function toggleRaw(){rawConsole=!rawConsole;$('#rawbtn').textContent=rawConsole?'raw':'filtered';tick();}
+function toggleRaw(){rawConsole=!rawConsole;$('#rawbtn').textContent=rawConsole?'raw':'filtered';conReset();tick();}
 let _powerBusy=false;
 // Pressed-action tracker: the clicked button stays lit ("working") until the server actually
 // reaches the requested state — tick() feeds server_up into updatePwrTrack each second.
@@ -3537,7 +4228,7 @@ document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;
 tick();setInterval(tick,500);tickRes();setInterval(tickRes,5000);paintLegend();updateFsBtn();
 // 60fps: tDraw=_mapClock()−MAP_DELAY_S; _posAt linear lerp A→B every frame (never raw latest).
 (function rafLoop(){
-  if(atlas&&mapImg&&!document.hidden&&!panelHidden.map&&!document.querySelector('.ov.on')&&((lastPlayers&&lastPlayers.length)||Object.keys(entHistory).length)){
+  if(atlas&&mapImg&&!document.hidden&&!panelHidden.map&&!document.querySelector('.ov.on')&&((lastPlayers&&lastPlayers.length)||Object.keys(entHistory).length||(acmiLive&&Object.keys(acmiHist).length))){
     mapRenderTime=_mapClock(); render(); }
   requestAnimationFrame(rafLoop);
 })();

@@ -105,6 +105,15 @@ WRAPPER_TEMPLATE = (
     "  echo '[relay] NO RELAY TOOL found in container' >> ./logs/relay.log\n"
     "fi\n"
     "tail -n +1 -F ./logs/console.log 2>/dev/null &\n"
+    # The panel marks a server running when its console shows the game's ready line. Nothing this wrapper prints
+    # reaches that console (the start command preloads Doorstop into this shell and its stdout ends up on relay.log),
+    # so a clean shell watches the log and writes the line straight to the console (/proc/1/fd/1).
+    "env -u LD_PRELOAD ls -l /proc/1/fd /proc/$$/fd >> ./logs/relay.log 2>&1\n"
+    "env -u LD_PRELOAD -u DOORSTOP_ENABLED -u DOORSTOP_ENABLE sh -c 'i=0; while [ \"$i\" -lt 900 ]; do "
+    "if grep -q \"Waiting for Players before loading next map\" ./logs/console.log 2>/dev/null; then "
+    "echo \"[DedicatedServerManager] Waiting for Players before loading next map\" > /proc/1/fd/1; "
+    "echo \"[wrapper] ready line sent to the panel after ${{i}}s\" >> ./logs/relay.log; break; fi; "
+    "sleep 2; i=$((i+2)); done' >/dev/null 2>&1 &\n"
     "exec ./" + REAL + " -logFile ./logs/console.log -limitframerate {framerate}"
     " -ServerRemoteCommands " + str(REMOTE_CMD_PORT) + ' "$@"\n'
 )
