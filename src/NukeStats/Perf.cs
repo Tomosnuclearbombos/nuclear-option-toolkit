@@ -61,6 +61,8 @@ namespace NukeStats
                 "With Timing and Phases on, log one hitch line for any frame that takes longer than this many milliseconds: "
                 + "which frame stages and timed parts took the time, and whether a garbage collection ran in that frame. "
                 + "At most one line every 2 seconds. 0 = off.");
+            PerfExtra.Initialize(config);   // 1.9.2: SkipVisualEffects, SkipServerParticles, FramePacer
+            ObjectiveThrottle.Initialize(config);   // 1.9.2: destroy-units objectives checked less often while idle
             // Owner 2026-10-07: which CPU each host runs on (the provider may have moved to Ryzen). The engine reads it
             // from the system; logged once at start.
             try
@@ -208,6 +210,7 @@ namespace NukeStats
                 else missing.Add("Pilot.Pilot_OnAeroInputsApplied");
                 SlowRunnerInstall(missing);
                 SpawnProbeInstall(missing);
+                PerfMission.Install(_harmony, _patched, missing);   // 1.9.2: which objective/outcome a hitch was
                 if (_ticks.Length < _labels.Count) { _ticks = new long[_labels.Count]; _calls = new int[_labels.Count]; }
                 if (_frameTicks.Length < _labels.Count) _frameTicks = new long[_labels.Count];
                 _on = true;
@@ -225,6 +228,7 @@ namespace NukeStats
         static void Uninstall()
         {
             _on = false;
+            PerfMission.Off();   // 1.9.2
             try
             {
                 foreach (var m in _patched) _harmony?.Unpatch(m, HarmonyPatchType.All, _harmony.Id);
@@ -599,6 +603,7 @@ namespace NukeStats
             _frameStart = now;
             _frameGc = gc;
             _slowFrameInfo = null;
+            PerfMission.FrameReset();   // 1.9.2
             Array.Clear(_frameStage, 0, _frameStage.Length);
             Array.Clear(_frameTicks, 0, _frameTicks.Length);
             Array.Clear(_framePlug, 0, _framePlug.Length);
@@ -636,6 +641,7 @@ namespace NukeStats
             Top(sb, "timed", _labels, _frameTicks, 5);
             Top(sb, "plugin", PlugNames, _framePlug, 3);
             if (_slowFrameInfo != null) sb.Append(",\"slow_burst\":").Append(_slowFrameInfo);
+            PerfMission.AppendFrame(sb);   // 1.9.2: the frame's biggest objective/outcome work
             sb.Append('}');
             NukeStatsPlugin.Out(sb.ToString());
         }
@@ -737,6 +743,7 @@ namespace NukeStats
             bool wantPhases = _on && Phases != null && Phases.Value;
             if (wantPhases && !_phasesOn) PhasesInstall();
             else if (!wantPhases && _phasesOn) PhasesUninstall();
+            PerfExtra.Tick1s(running, now);   // 1.9.2
             ApplyWorkers();
             ApplyFps();
             ApplySkips(running);
@@ -850,6 +857,17 @@ namespace NukeStats
                 if (want > 240) want = 240;
                 bool waiting = GameManager.gameState == GameState.ServerWaiting;
                 if (waiting) { _fpsApplied = 0; return; }                // the game's own 5 fps; it resets the rate itself
+                if (PerfExtra.PacingActive(out int pacerFps))            // 1.9.2 Perf.FramePacer: the plugin paces, Unity's cap off
+                {
+                    if (Application.targetFrameRate != -1)
+                    {
+                        int was = Application.targetFrameRate;
+                        Application.targetFrameRate = -1;
+                        _fpsApplied = 1;
+                        NukeStatsPlugin.Log?.LogInfo($"[perf] frame-rate cap {was} -> off: the frame pacer paces to {pacerFps}");
+                    }
+                    return;
+                }
                 if (want > 0)
                 {
                     if (Application.targetFrameRate != want)
@@ -1018,6 +1036,8 @@ namespace NukeStats
                     }
                     sb.Append('}');
                 }
+                PerfExtra.Append(sb, sec);   // 1.9.2
+                PerfMission.Append(sb);      // 1.9.2: the minute's top objectives/outcomes
                 PerfHeld.Append(sb, _hitches, _hitchesGc, _hitchesUnlogged);
                 sb.Append('}');
                 ResetWindow();

@@ -41,7 +41,8 @@ I run two servers on this. This is the public version of it.
 - **Shared ranks**: one points table across two or more of your own servers.
 - **Performance tools**: tools that show exactly where the server spends its time, written to
   `perf_log.csv` once a minute, plus settings for the frame rate the server aims for and the number of
-  physics worker threads.
+  physics worker threads. With timing on, a long frame also names the mission objective or outcome that
+  caused it, and the bot keeps those in `hitch_log.jsonl`.
 
 ## Installation
 

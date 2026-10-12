@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.1";
+        public const string Version = "1.9.2";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -159,6 +159,7 @@ namespace NukeStats
         internal static ConfigEntry<float> FloodInboundKickSeconds;
         internal static ConfigEntry<bool>  OverflowAbsorb;        // guard E: veto the send-buffer-full disconnect (reason 5) so an overflow can't mass-DC the lobby; genuinely-dead clients still drop via Mirage's own Timeout (reason 1, un-vetoed)
         internal static ConfigEntry<int>   OverflowKickThreshold; // # of DISTINCT victims ONE source must overflow within ~3s before that source is kicked (a legit sender overflows ~none). 0 = absorb-only
+        internal static ConfigEntry<float> OverflowSingleRelease; // 1.9.2: a player whose buffer stays full ON HIS OWN this many seconds is let go (0 = never)
         internal static ConfigEntry<bool> MirageRaiseSendBuffer;  // anti mass-DC Layer C: raise the reliable-send-buffer cap
         internal static ConfigEntry<int>  MirageSendBufferLimit;  // target for MaxReliablePacketsInSendBufferPerConnection
         internal static ConfigEntry<bool> LimboAutoRelease;       // 1.2.1: transport-disconnect a wedged (map-load-failed) session so the client can rejoin cleanly
@@ -519,6 +520,12 @@ namespace NukeStats
                 + "victims within ~3s it is kicked (admins exempt). Counting DISTINCT victims (not raw overflows) is what makes it "
                 + "safe -- a legit sender overflows ~no one, a flooder overflows everyone -- plus a congestion breaker suppresses the "
                 + "kick when 3+ sources flood at once (server-wide lag, not one griefer). Only reached for RPC-triggered broadcasts.");
+            OverflowSingleRelease = Config.Bind("Flood", "SingleVictimReleaseSeconds", 5f,
+                "GUARD E release (1.9.2). When ONE player's send buffer stays full on its own (no other player overflowing) for "
+                + "this many seconds in a row, the buffer-full disconnect is let through for that player only. His connection has "
+                + "stopped taking data: vetoing it just left him frozen until the game's own timeout dropped him (about 30 s), "
+                + "with an error line for every failed send. Let go, he can rejoin straight away. A flood that overflows two "
+                + "or more players at once is still absorbed exactly as before. 0 = never (veto every buffer-full disconnect).");
             CommandPolicy = Config.Bind("Command", "Policy", "HeliDroppedOnly",
                 "Which units players may order via CmdSetDestination (unit move-commands). One of: "
                 + "All (any commandable unit) | RateLimitOnly (alias of All) | "
@@ -1152,6 +1159,25 @@ namespace NukeStats
                 if (toKick != null) KickOverflowSource(toKick, now);
             }
             catch (Exception e) { Log?.LogError("NoteOverflowAbsorbed: " + e); }
+        }
+
+        // 1.9.2: guard E let one stuck player's buffer-full disconnect through (OverflowRelease). Logged once per player.
+        internal static void NoteOverflowReleased(object victim, double stuckFor)
+        {
+            try
+            {
+                string who = "a player";
+                if (System.Threading.Thread.CurrentThread.ManagedThreadId == _mainThreadId)   // names only on the main thread
+                {
+                    foreach (var h in Humans())
+                    {
+                        object conn = h.Owner != null ? ReflectGet(h.Owner, "Connection") : null;
+                        if (ReferenceEquals(h.Owner, victim) || (conn != null && ReferenceEquals(conn, victim))) { who = RawNameOf(h) + " (" + Sid(h) + ")"; break; }
+                    }
+                }
+                Log?.LogWarning($"[flood] {who}: send buffer full on its own for {stuckFor:0.0} s -> buffer-full disconnect let through so they can rejoin (guard E release; a flood on several players is still absorbed)");
+            }
+            catch (Exception e) { Log?.LogError("NoteOverflowReleased: " + e); }
         }
 
         // Kick the connection overflowing everyone's send buffer (guard E part 2). Resolves source -> Player; admins
@@ -2931,6 +2957,16 @@ namespace NukeStats
                 bool water = false;
                 if (landed) { try { water = IsOnWater(ac); } catch { } }
                 if (water) landed = false;
+                // 1.9.2: a DESTROYED hull is never a landed exit. When a shot-down wreck comes to rest, the game's
+                // auto-eject runs on it ~30 s after the death and IsLanded() is true (on the ground, stopped), so the
+                // dead pilot got a "landed" sortie. Its death was already booked by ReportKilled.
+                bool wreck = false;
+                try { wreck = ac.disabled; } catch { }
+                if (wreck)
+                {
+                    Log?.LogInfo($"[bail] eject from the destroyed hull of {RawNameOf(p)} - not a sortie, the death is already booked");
+                    return;
+                }
                 if (!landed)
                 {
                     bool adminStamped = false;
@@ -3350,6 +3386,10 @@ namespace NukeStats
                 string n = p.GetAuthData()?.ClientReportedSteamName;
                 if (string.IsNullOrWhiteSpace(n)) return null;
                 n = (n.SanitizeRichText(32) ?? "").Trim();
+                // 1.9.2: also swap characters the name font cannot draw, as the game does for a Steam name
+                // (Player.GetPlayerName), so the fallback is the same string the Steam name will be later
+                if (GameAssets.i != null && GameAssets.i.playerNameFont != null)
+                    n = (n.ReplaceCharactersNotInFont(GameAssets.i.playerNameFont) ?? "").Trim();
                 if (!IsResolved(n) || _steamIdIn.IsMatch(n)) return null;
                 bool digitsOnly = true;
                 foreach (char ch in n) { if (!char.IsDigit(ch) && !char.IsWhiteSpace(ch)) { digitsOnly = false; break; } }
@@ -8481,7 +8521,8 @@ namespace NukeStats
     // overflows, Mirage.NetworkPlayer.Send catches BufferFullException and calls Disconnect((DisconnectReason)5) -- and a
     // flood overflows EVERY client's buffer at once, so the game itself disconnects the whole lobby (not our guards).
     // DisconnectReason 5 is used ONLY for this (verified by decompiling Mirage.dll: exactly two call sites, both the
-    // buffer-full catch). We prefix Disconnect(reason) and ALWAYS VETO reason 5 -> the overflow is ABSORBED (the
+    // buffer-full catch). We prefix Disconnect(reason) and VETO reason 5 (1.9.2: except ONE player stuck on his own,
+    // see OverflowRelease) -> the overflow is ABSORBED (the
     // un-queueable packet is dropped for that one connection), the player STAYS. No grace valve: a genuinely-dead client
     // is still dropped by Mirage's own Timeout (reason 1, un-vetoed). COMMAND-AGNOSTIC. A SUSTAINED flood causes desync
     // (dropped reliable packets) until the source stops or is kicked, but nobody is mass-kicked. Applied MANUALLY from
@@ -8505,6 +8546,15 @@ namespace NukeStats
                 try { reason = System.Convert.ToInt32(__0); } catch { return true; }
                 if (reason != 5) return true;                                        // ONLY the send-buffer-full disconnect; normal leaves/kicks/TIMEOUTS pass through untouched
                 if (!_fired) { _fired = true; NukeStatsPlugin.Log?.LogInfo("[diag] send-buffer overflow ABSORB ACTIVE (flood guard E): buffer-full disconnects vetoed; dead clients still drop via Mirage Timeout"); }
+                // 1.9.2: ONE player stuck on his own (nobody else overflowing) for SingleVictimReleaseSeconds is let go, so he
+                // drops and rejoins instead of sitting frozen until Mirage's timeout; a flood on several players is still absorbed
+                var rel = NukeStatsPlugin.OverflowSingleRelease;
+                if (rel != null && rel.Value > 0f
+                    && OverflowRelease.ShouldRelease(__instance, OverflowRelease.Now(), rel.Value, out bool firstRelease, out double stuckFor))
+                {
+                    if (firstRelease) NukeStatsPlugin.NoteOverflowReleased(__instance, stuckFor);
+                    return true;                                                      // let the game disconnect this one player
+                }
                 NukeStatsPlugin.NoteOverflowAbsorbed(__instance);                    // blame the current RPC source (main-thread-gated); kick it if it floods many distinct victims
                 return false;                                                         // ABSORB: skip the disconnect, keep the player connected
             }

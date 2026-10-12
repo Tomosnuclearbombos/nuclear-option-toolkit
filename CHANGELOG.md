@@ -2,6 +2,42 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [1.9.2] 2026-10-13
+
+* **The recorder is a lot lighter.** Build 3 of the
+  [NOBlackBox fork](https://github.com/Tomosnuclearbombos/NOBlackBox/releases) takes about 80% less of the
+  game's main thread, which on my PvE server was 54 to 85 ms of every second with 16 or more players on. It
+  now hears about new units, destroyed units and explosions from the game, so it no longer searches the
+  whole scene for them, and it only visits an object when its next update is due. Download the new zip and
+  unzip it over the old `NOBlackBox` folder.
+* **Mission objectives are checked less often.** A destroy-units objective was checking every one of its
+  targets every frame, and on Escalation one objective alone cost about 10 ms of every second. The plugin
+  now checks each one every quarter of a second while none of its targets are dying, and every frame again
+  as soon as one is, given the game only marks one target per check. This is `Perf.DestroyCheckSeconds`
+  (0.25, and 0 turns it off). On the test server it took the mission code from 11.9 to 1.5 ms a second.
+* **A stuck player is let go.** Flood guard E stops the game disconnecting everyone when a flood fills every
+  player's send buffer at once, however, it was also holding on to a single player whose connection had
+  stopped taking data. He then sat frozen for about 30 seconds until the game timed him out. If one
+  player's buffer stays full on its own for 5 seconds (`Flood.SingleVictimReleaseSeconds`) he is now
+  disconnected so he can rejoin straight away, and a flood that hits two or more players is still blocked
+  as before.
+* **Hitches are named.** With `Perf.Timing` on, each long frame in the log now says which mission objective
+  or outcome caused it and how many units a spawn made, and the bot keeps every one in `hitch_log.jsonl`
+  with the mission it happened on. Of note, this is how I found a 17-unit convoy that spawned in one frame
+  and cost about 90 ms.
+* **Three more performance switches, all off by default.** `Perf.SkipVisualEffects` turns off wing vapour,
+  propeller spin and the smoke trail emitter, `Perf.SkipServerParticles` stops particle effects filling up
+  with particles nobody sees on a server (flares and chaff are left alone), and `Perf.FramePacer` has the
+  plugin pace the frames in place of Unity's frame cap. The first two are on on my servers. The frame pacer
+  made no difference on Windows and I haven't tested it on a Linux host yet.
+* **Smaller fixes.** The console history keeps 20 copies of one line a minute and counts the rest, given one
+  player's full network queue logged the same error 22,075 times in 33 seconds and the day's earlier history
+  was trimmed away. The ban log ignores the same offence logged twice within 30 seconds. Mission time warnings
+  and the timed chat messages now wait 90 seconds after the server has been empty, as an empty server only
+  loads its mission when the first player joins. The deep mission audit's result now survives a bot restart.
+  A player whose wreck ejects them after a death no longer gets a landed sortie, and the name taken from a
+  player's own game when Steam has none now swaps out characters the name font can't draw, as the game does.
+
 ## [1.9.1] 2026-10-12
 
 * **Unnamed players fixed.** A new account with no Steam profile showed as "Pilot" everywhere, given Steam

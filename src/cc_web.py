@@ -141,16 +141,18 @@ _CATALOGUE_EXTRA = [
     {"key": "MAP_VOTE_DURATION", "friendlyName": "Map vote length (s)", "group": "End of Match & Votes",
      "owner": "bot", "type": "int", "default": "30", "live": "live", "min": 10, "max": 300, "commonlyChanged": True,
      "adminDescription": "How long the map-vote ballot stays open — used for BOTH the end-of-match vote and the "
-                         "player !votemap ballot. The map then changes (vote length + post-vote delay) seconds "
-                         "after the mission ends; the server's PostMissionDelay is derived from these two, so it "
-                         "can never be shorter than the vote."},
+                         "player !votemap ballot. With the two-stage vote (mission, then time/weather) the map "
+                         "changes (2 x vote length + post-vote delay) seconds after the mission ends, e.g. "
+                         "2 x 45 + 5 = 95s; the server's PostMissionDelay is derived from these, so it can never "
+                         "be shorter than the votes."},
     {"key": "POST_VOTE_MAP_CHANGE_DELAY", "friendlyName": "Delay after vote before map change (s)",
      "group": "End of Match & Votes", "owner": "bot", "type": "int", "default": "15", "live": "live",
      "min": 5, "max": 300, "commonlyChanged": True,
      "adminDescription": "Seconds AFTER the ballot closes before the winning map loads. The effective "
-                         "post-mission delay is DERIVED = vote length + this (e.g. 30 + 15 = 45s) and pushed to "
-                         "the server automatically — you never set a raw post-mission delay, so the old broken "
-                         "combination (delay shorter than the vote) is impossible."},
+                         "post-mission delay is DERIVED = 2 x vote length + this with the two-stage vote (e.g. "
+                         "2 x 45 + 5 = 95s) and pushed to the server automatically — you never set a raw "
+                         "post-mission delay, so the old broken combination (delay shorter than the vote) is "
+                         "impossible."},
     # Force-PvP-at-high-pop — edited in Game Settings (Map Pool tip points here). owner=votemap so
     # /api/settings GET reads votemap_config.json and POST routes set_cfg_dispatch → set_votemap_cfg
     # (same writer as /api/votemap). Keys must stay in _VOTEMAP_KEYS / bot _VOTEMAP_DEFAULTS.
@@ -1175,6 +1177,7 @@ def _act_names(lines, live_players):
         # (a join line carries its own tag, worked out from the SteamID). A new player's join read [GPCAPT]
         # from a different player who is really called Pilot.
         if nm == standin or live_n.get(nm, 0) > 1:
+            out[nm] = None                       # 10-12: explicit "no tag" so an open panel drops an earlier one
             continue
         if nm in live and live[nm][0]:
             out[nm] = live[nm]
@@ -1187,6 +1190,7 @@ def _act_names(lines, live_players):
         if idx is None:
             idx = _name_index()
         if nm in _NAME_INDEX.get("dup", ()) and nm not in live:
+            out[nm] = None                       # 10-12: explicit "no tag" so an open panel drops an earlier one
             continue
         sid = idx.get(nm)
         val = _rank_full(sid) if sid else None
@@ -1294,6 +1298,49 @@ def _keep_tail_with_day(data, keep):
     return data[ls:le + 1] + kept
 
 
+class _RepeatFold:
+    """2026-10-12 (bug sweep): one player's full network queue made the game log the same 5-line error 22,075 times
+    in 33 s (19.9 MB); the archive went over its size limit and the trim kept only the spam, so the day's earlier
+    console history was lost. The first 20 copies of a line per minute are kept; after that one line says how many
+    more there were. A one-off stack trace or any normal line is untouched."""
+    KEEP = 20          # copies of one line kept per minute
+    WINDOW = 60.0      # seconds
+
+    _lead = re.compile(r"^\s*\d+(?:\.\d+)?:\s*")
+    _digits = re.compile(r"\d+")
+
+    def __init__(self):
+        self.seen = {}  # signature -> [window start, kept, folded, example]
+
+    def _sig(self, ln):
+        return self._digits.sub("#", self._lead.sub("", ln)).strip()
+
+    def take(self, ln, now):
+        """True = archive this line. False = folded into the count."""
+        sig = self._sig(ln)
+        e = self.seen.get(sig)
+        if e is None or now - e[0] >= self.WINDOW:
+            if len(self.seen) > 5000:
+                self.seen.clear()
+            e = self.seen[sig] = [now, 0, 0, ln]
+        if e[1] < self.KEEP:
+            e[1] += 1
+            return True
+        e[2] += 1
+        return False
+
+    def summaries(self, now):
+        """One line for each line whose minute is over and had copies folded."""
+        out = []
+        for sig, e in list(self.seen.items()):
+            if e[2] > 0 and now - e[0] >= self.WINDOW:
+                out.append("(repeated %d more times in that minute, not kept: %s)" % (e[2], e[3].strip()[:160]))
+                e[2] = 0
+            if now - e[0] >= self.WINDOW * 2:
+                self.seen.pop(sig, None)
+        return out
+
+
 class _ConsoleArchiver:
     """Copies the console lines the panel shows (errors + the lines the noise filter keeps; never the [NOSTATS]
     data frames) from console_mirror.log into console_history.log with the wall-clock time, plus a [DAY] line when
@@ -1303,6 +1350,7 @@ class _ConsoleArchiver:
         self.off = None
         self.rest = b""
         self.day = None
+        self.fold = _RepeatFold()
 
     def _resume(self):
         """Pick up after the last archived line if it is still in the mirror, else at the mirror's end."""
@@ -1356,9 +1404,12 @@ class _ConsoleArchiver:
         self.rest = buf[cut + 1:]
         out = []
         today = _day_text()
+        now = time.time()
         for raw in buf[:cut].split(b"\n"):
             ln = raw.decode("utf-8", "replace").rstrip("\r")
             if not ln.strip() or _classify(ln) not in ("show", "error"):
+                continue
+            if not self.fold.take(ln, now):             # 10-12: a flood of one line is counted, not kept
                 continue
             if today != self.day:
                 self.day = today
@@ -1382,10 +1433,17 @@ class _ConsoleArchiver:
         except OSError:
             pass
 
+    def _flush_folds(self):
+        lines = self.fold.summaries(time.time())
+        if lines:
+            with open(CONSOLE_ARCHIVE, "a", encoding="utf-8") as f:
+                f.write("".join(f"{_stamp()}  {s}\n" for s in lines))
+
     def run(self):
         while True:
             try:
                 self.step()
+                self._flush_folds()
             except Exception:                            # noqa: BLE001 - the archive must never stop
                 pass
             time.sleep(0.5)

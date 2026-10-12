@@ -54,6 +54,14 @@
     <Reference Include="Mirage.SocketLayer">
       <HintPath>libs/Mirage.SocketLayer.dll</HintPath><Private>false</Private>
     </Reference>
+    <!-- 1.9.2 ReportedName: the game's ReplaceCharactersNotInFont takes a TMP_FontAsset -->
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>libs/Unity.TextMeshPro.dll</HintPath><Private>false</Private>
+    </Reference>
+    <!-- 1.9.2 Perf.SkipServerParticles -->
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>libs/UnityEngine.ParticleSystemModule.dll</HintPath><Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

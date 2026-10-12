@@ -3243,6 +3243,13 @@ def log_ban(sid, name, reason, detail=None):
             pass
         if d:
             ent["detail"] = d
+    # 10-12 (bug sweep): the same offence logged again (the button pressed twice, a report logged twice) is not a
+    # new ban - three clicks in 20 s made one teamkill read "now 3x in the ban log"
+    for old in rec["entries"][-10:]:
+        if (old.get("reason") == ent["reason"] and old.get("detail") == ent.get("detail")
+                and abs(int(old.get("ts") or 0) - ent["ts"]) <= 30):
+            save_ban_log()
+            return len(rec["entries"])
     rec["entries"].append(ent)
     rec["entries"] = rec["entries"][-50:]      # cap per-player history
     save_ban_log()
@@ -6526,11 +6533,20 @@ def handle_stats_line(rc, obj):
                "teamcap": obj.get("teamcap"), "totcap": obj.get("totcap")}
         AIR_TS = time.time()
         return
+    if t == "hitch":
+        # 1.9.8 (owner 2026-10-13): every long frame the plugin describes is kept in hitch_log.jsonl, with the mission
+        hitch_log_write(dict({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "mission": CURRENT_MISSION}, **obj))
+        return
     if t == "perf":
         # 1.9.5: the plugin's per-minute timing summary -> the per-minute performance log
         global PERF, PERF_TS
         PERF = {k: v for k, v in obj.items() if k != "t"}
         PERF_TS = time.time()
+        if obj.get("objectives"):
+            # 1.9.8: the minute's costliest objectives/outcomes, kept next to the hitches
+            hitch_log_write({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "t": "objectives", "mission": CURRENT_MISSION,
+                             "humans": obj.get("humans"), "ai": obj.get("ai_aircraft"), "ft_ms": obj.get("ft_ms"),
+                             "ft_max": obj.get("ft_max"), "top": obj.get("objectives")})
         return
     if t == "net":
         # connection-health / RTT-probe telemetry (Connection Stress panel); payload shape is plugin-defined.
@@ -7221,6 +7237,19 @@ def push_plugin_ranks():
 # 1.9.5 (owner 2026-10-06): one line a minute in perf_log.csv. The panel CPU read runs on its own thread so the loop
 # never waits on the panel.
 PERF_LOG = os.path.join(_BASE_DIR, "perf_log.csv")
+# 1.9.8 (owner 2026-10-13): the plugin's hitch lines + each minute's costliest objectives/outcomes, one JSON per line.
+# About 0.5 MB a day; at 20 MB it is renamed with the date and a new file starts (nothing is deleted).
+HITCH_LOG = os.path.join(_BASE_DIR, "hitch_log.jsonl")
+
+
+def hitch_log_write(rec):
+    try:
+        if os.path.exists(HITCH_LOG) and os.path.getsize(HITCH_LOG) > 20 * 1024 * 1024:
+            os.replace(HITCH_LOG, os.path.join(_BASE_DIR, time.strftime("hitch_log-%Y%m%d-%H%M%S.jsonl")))
+        with open(HITCH_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    except Exception as e:                        # noqa: BLE001 - never stops the console reader
+        print(f"[hitch-log] write failed: {e}")
 _PERF_LOG_COLS = ["time", "online", "ai_aircraft", "player_aircraft", "frametime_ms", "cpu_pct", "mem_mb", "panel_state",
                   "mission", "ft_avg", "ft_p95", "ft_max", "plugin_ms", "top_costs"]
 
@@ -8487,6 +8516,7 @@ def main():
     last_rank_shown = {}        # steamid -> time, to throttle per-chat rank lines
     last_namesync = 0           # last refresh of the player-name cache
     known_online = set()        # steamids seen online last poll (for join announces)
+    occupied_since = None       # 10-12: when the server stopped being empty (a parked server loads its mission then)
     seeded_online = False       # skip the first poll so we don't "welcome" everyone
     server_up = True            # game live: RCMD OK OR recent console/NOSTATS (not RCMD-alone)
     rcmd_up = True              # remote-command relay specifically reachable
@@ -9173,6 +9203,10 @@ def main():
                     seeded_online = True
                     seed_welcomed_on_restart(current)   # a restart must not re-welcome everyone
                     activity(f"{len(current)} player(s) currently online", "INFO")
+                if current and not known_online:
+                    occupied_since = now
+                elif not current:
+                    occupied_since = None
                 known_online = current
             else:
                 # RCMD failed — do NOT clear known_online (EmptyAutoDeploy would false-empty).
@@ -9200,22 +9234,25 @@ def main():
             last_season_at = now
             rc.say(sysmsg_text("season", _SYSMSG_SEASON_DEFAULT))
 
+        # 10-12: the periodic lines wait 90 s after an empty spell too (a line sent while a parked server is
+        # still loading its mission throws in the game and is lost)
+        settled = occupied_since is not None and now - occupied_since >= 90
         if (sysmsg_on("thanks") and now - last_thanks_at >= sysmsg_interval("thanks", THANKS_INTERVAL)
-                and known_online and state == "IDLE"):
+                and known_online and state == "IDLE" and settled):
             last_thanks_at = now
             rc.say(sysmsg_text("thanks", "<color=#FFD200>Thanks for playing!</color> For a list of "
                                          "commands type <color=#55FF55>!help</color>"))
 
         # every 30 min during an active match: auto-post the leaderboard to chat
         if (sysmsg_on("leaderboard") and now - last_leaderboard_at >= sysmsg_interval("leaderboard", LEADERBOARD_INTERVAL)
-                and known_online and state == "IDLE"):
+                and known_online and state == "IDLE" and settled):
             last_leaderboard_at = now
             broadcast(rc, leaderboard_lines(), "Leaderboard")
 
         # every 12 min while players are on: how to spectate / switch to the smaller team.
         # The team-switch line only shows in a PvP match (both factions have players).
         if (sysmsg_on("spectip") and now - last_spectip_at >= sysmsg_interval("spectip", SPECTIP_INTERVAL)
-                and known_online and state == "IDLE"):
+                and known_online and state == "IDLE" and settled):
             last_spectip_at = now
             facs = {(p.get("faction") or "").lower() for p in ROSTER_BY_SID.values()}
             facs.discard(""); facs.discard("none"); facs.discard("null")
@@ -9227,7 +9264,7 @@ def main():
         # publishing, is stale, or is empty - so this stays silent rather than advertising a dead server.
         if (sysmsg_on("otherserver")
                 and now - last_otherserver_at >= sysmsg_interval("otherserver", OTHERSERVER_INTERVAL)
-                and known_online and state == "IDLE"):
+                and known_online and state == "IDLE" and settled):
             try:
                 _peer_ln = peer_presence_line()
                 if _peer_ln:
@@ -9336,7 +9373,10 @@ def main():
                                               # transient post-vote name -> no double "Mission time: X remaining"
             if cur is not None and mx is not None:
                 mtime = [cur, mx, now]
-                check_mission_time_warnings(rc, mtime, CURRENT_MISSION)
+                # 10-12: not in the first 90 s after an empty spell - the clock is the parked mission's until the
+                # next one loads ("1 minute remaining" went out just before a fresh mission loaded)
+                if occupied_since is not None and now - occupied_since >= 90:
+                    check_mission_time_warnings(rc, mtime, CURRENT_MISSION)
             if cur is not None and mx is not None:
                 try:
                     check_match_milestones(rc, mtime)   # 'stay for next match' reminders
@@ -9481,8 +9521,10 @@ def main():
                 if cur and (cur == vote_verify["expected"] or current_matches):
                     print(f"[vote] verified: '{cur}' loaded as voted")
                     vote_verify = None
-                elif (cur and cur != "(unknown)" and cur != (vote_verify.get("prior") or "")) or next_matches:
+                elif cur and cur != "(unknown)" and cur != (vote_verify.get("prior") or ""):
                     # A different new mission is running. Do not change it midway; keep the winner queued.
+                    # (10-12: only when the mission has really changed. The old mission still showing with the
+                    # winner queued next is normal until the post-mission countdown ends; that waits below.)
                     if next_matches:
                         activity(f"Vote-apply check: '{vote_verify['expected']}' missed the post-mission "
                                  f"window and is queued next; leaving current mission "
@@ -10241,7 +10283,9 @@ def deploy_plugin_job(dry=False, force=False):
                     return 2
             if online_count != 0:
                 _deploy_log(f"DEFER: {online_count} player(s) joined before restart. "
-                            "No power action taken; pending update retained for retry.")
+                            "No power action taken; pending update retained for retry."
+                            + (" The new plugin is ALREADY on the host and loads at the next game restart."
+                               if have_update else ""))
                 return 3
 
         # restart: STOP -> KILL-if-stuck/hung -> wait offline -> START -> verify via relay.
@@ -11067,6 +11111,30 @@ def _srvcfg_panel_mirror(key, old, new):
 # baseline (mission_baseline.json) to detect edits. ALL READ-ONLY over SFTP (never writes mission files).
 MISSION_BASELINE_FILE = os.path.join(_BASE_DIR, "mission_baseline.json")
 _mission_audit_cache = {"ts": 0.0, "data": {"loaded": False}}
+# 10-12 (bug sweep): the last DEEP scan's verdict on disk, so a bot restart after the 05:20 scan does not forget it
+# (it showed "not verified" and would have dropped an edited-official finding until the next morning)
+MISSION_INTEGRITY_FILE = os.path.join(_BASE_DIR, "mission_integrity.json")
+
+
+def _save_integrity(edited):
+    try:
+        tmp = MISSION_INTEGRITY_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"edited": list(edited or []), "ts": time.time()}, f)
+        os.replace(tmp, MISSION_INTEGRITY_FILE)
+    except OSError as e:
+        print(f"[mission-audit] could not save the deep-scan verdict: {e}")
+
+
+def _load_integrity():
+    try:
+        with open(MISSION_INTEGRITY_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and float(d.get("ts") or 0) > 0:
+            return {"edited": list(d.get("edited") or []), "integrity_from_ts": float(d["ts"])}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
 
 
 def refresh_mission_audit(deep=True):
@@ -11214,8 +11282,12 @@ def _publish_mission_audit(d):
     # A shallow scan performs no hashing, so it must never ASSERT an integrity verdict: publishing
     # edited=[] / eligible=True would clear a real tampering finding within 15 minutes of the deep scan
     # that found it. Carry the previous verdict forward and mark this result as unverified.
+    if d.get("deep") and d.get("scanned") and not d.get("error"):
+        _save_integrity(d.get("edited"))
     if not d.get("deep"):
         prev_any = _mission_audit_cache.get("data") or {}
+        if not prev_any.get("loaded"):
+            prev_any = _load_integrity() or prev_any   # the first scan after a restart: the last deep verdict
         d["edited"] = list(prev_any.get("edited") or [])
         d["integrity_verified"] = False
         d["integrity_from_ts"] = prev_any.get("integrity_from_ts") or prev_any.get("ts") or 0
