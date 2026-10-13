@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.2";
+        public const string Version = "1.9.3";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -206,6 +206,7 @@ namespace NukeStats
         void Awake()
         {
             Instance = this; Log = Logger;
+            PatchSafety.InstallGuard();   // before ANY hook: no hook of ours may go on a generic type's method
             _cfgFile = Config;   // cache the ConfigFile NOW — it survives the GameObject being destroyed, whereas Instance.Config later reads as Unity-null
             AiAirportRotation.Initialize(Config);
             AirbaseTaxi.Initialize(Config);     // 1.9.6 test 4: AI taxi/takeoff fixes (parts of Appulcake's AI Plane Unstuck)

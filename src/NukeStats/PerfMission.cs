@@ -18,6 +18,14 @@ namespace NukeStats
     // includes its outcomes) and each outcome, with the unit count for a spawn. A hitch line gets that frame's biggest ones
     // ("objectives"), the minute perf line the minute's top five. Installed and removed with Perf.Timing; never throws into
     // the game (a name lookup that fails just leaves the name out).
+    //
+    // 2026-10-13 CRASH FIX: the first build hooked each objective type's UpdateAndCheck/OnStart where the type inherits
+    // them, and for DestroyUnits, CaptureAirbase and ReachWaypoints that is the GENERIC base CompleteOrderObjective<T>.
+    // Mono runs one compiled copy of such a method for every T that is a class, and a Harmony hook on one T replaces that
+    // copy for all of them: OnStart then built the Waypoint list for a DestroyUnits objective and Mono aborted (S2, 13
+    // crashes, every player disconnected each time). Nothing declared on a generic type is ever hooked now
+    // (PatchSafety.IsShared, also enforced by PatchSafety.Audit): starts are timed through MissionRunner.StartObjective, and
+    // those three types' checks through their own CheckComplete and TryGetPosition, which the concrete types declare.
     internal static class PerfMission
     {
         const byte KCheck = 0, KStart = 1, KComplete = 2, KOutcome = 3;
@@ -63,9 +71,16 @@ namespace NukeStats
                     if (t == null || t.IsAbstract || t.IsInterface || t.ContainsGenericParameters) continue;
                     if (objT.IsAssignableFrom(t))
                     {
-                        // the implementation a concrete objective actually runs (it may live on a base class: patch it once)
-                        n += Patch(h, AccessTools.Method(t, "UpdateAndCheck", Type.EmptyTypes), pre, nameof(CheckPost), done, patched, missing);
-                        n += Patch(h, AccessTools.Method(t, "OnStart", Type.EmptyTypes), pre, nameof(StartPost), done, patched, missing);
+                        // the check a concrete objective actually runs (it may live on a base class: patch it once), unless
+                        // that base is generic: then the type's own per-target work, declared on the type itself
+                        var check = AccessTools.Method(t, "UpdateAndCheck", Type.EmptyTypes);
+                        if (check != null && !PatchSafety.IsShared(check))
+                            n += Patch(h, check, pre, nameof(CheckPost), done, patched, missing);
+                        else
+                        {
+                            n += Patch(h, AccessTools.DeclaredMethod(t, "CheckComplete"), pre, nameof(CheckPost), done, patched, missing);
+                            n += Patch(h, AccessTools.DeclaredMethod(t, "TryGetPosition"), pre, nameof(CheckPost), done, patched, missing);
+                        }
                     }
                     else if (outT.IsAssignableFrom(t))
                     {
@@ -74,6 +89,8 @@ namespace NukeStats
                     }
                 }
                 n += Patch(h, AccessTools.DeclaredMethod(runT, "CompleteObjective", new[] { objT }), pre, nameof(CompletePost), done, patched, missing);
+                // every objective start (it runs the objective's OnStart), on the runner instead of each OnStart
+                n += Patch(h, AccessTools.DeclaredMethod(runT, "StartObjective", new[] { objT, typeof(bool) }), pre, nameof(StartPost), done, patched, missing);
                 Clear();
                 _on = n > 0;
                 NukeStatsPlugin.Log?.LogInfo($"[perf] mission timers on: {n} objective/outcome method(s)");
@@ -84,6 +101,7 @@ namespace NukeStats
         static int Patch(Harmony h, MethodInfo m, HarmonyMethod pre, string post, HashSet<MethodBase> done, List<MethodBase> patched, List<string> missing)
         {
             if (m == null || m.IsAbstract || !done.Add(m)) return 0;
+            if (PatchSafety.IsShared(m)) { missing.Add(m.DeclaringType?.Name + "." + m.Name + " (generic, never hooked)"); return 0; }
             try
             {
                 h.Patch(m, prefix: pre, postfix: new HarmonyMethod(typeof(PerfMission).GetMethod(post, BindingFlags.Static | BindingFlags.NonPublic)) { priority = Priority.First });
@@ -104,7 +122,7 @@ namespace NukeStats
 
         static void Pre(out long __state) { __state = Stopwatch.GetTimestamp(); }
         static void CheckPost(long __state, object __instance) { Note(KCheck, __instance, __state); }
-        static void StartPost(long __state, object __instance) { Note(KStart, __instance, __state); }
+        static void StartPost(long __state, object __0) { Note(KStart, __0, __state); }   // MissionRunner.StartObjective(obj, ...)
         static void OutcomePost(long __state, object __instance) { Note(KOutcome, __instance, __state); }
         static void CompletePost(long __state, object __0) { Note(KComplete, __0, __state); }
 

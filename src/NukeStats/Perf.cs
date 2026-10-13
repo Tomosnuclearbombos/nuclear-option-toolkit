@@ -215,6 +215,7 @@ namespace NukeStats
                 if (_frameTicks.Length < _labels.Count) _frameTicks = new long[_labels.Count];
                 _on = true;
                 ResetWindow();
+                PatchSafety.Audit("timing on");   // no hook of ours may sit on a generic type's method
                 NukeStatsPlugin.Log?.LogInfo($"[perf] timing on: {_patched.Count} method(s) hooked"
                     + (missing.Count > 0 ? ", not found: " + string.Join(", ", missing) : ""));
             }
@@ -743,6 +744,7 @@ namespace NukeStats
             bool wantPhases = _on && Phases != null && Phases.Value;
             if (wantPhases && !_phasesOn) PhasesInstall();
             else if (!wantPhases && _phasesOn) PhasesUninstall();
+            PatchSafety.AuditOnce();          // every hook checked once after start (Awake hooks are in)
             PerfExtra.Tick1s(running, now);   // 1.9.2
             ApplyWorkers();
             ApplyFps();

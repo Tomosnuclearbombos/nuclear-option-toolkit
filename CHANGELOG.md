@@ -2,6 +2,18 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [1.9.3] 2026-10-13
+
+* **Crash fix.** 1.9.2 could crash the game server when `Perf.Timing` was on. The mission timers hooked code the game
+  shares between its destroy-units, capture-airbase and reach-waypoints objectives, and on the game's Mono a hook on
+  shared code like that runs one objective type's version for all three. When one of those objectives started part way
+  through a mission the server aborted and everyone was disconnected, which happened on my PvE server 13 times on 13
+  October. The timers now only hook code that isn't shared, and the destroy-units objective check no longer hooks the
+  objectives at all.
+* **A guard so it can't happen again.** The plugin now refuses to put any of its hooks on that kind of shared code
+  before the hook goes in, and logs an error if anything tries. If you're on 1.9.2 with `Perf.Timing` on, update to
+  this one, or turn timing off and restart the server until you do.
+
 ## [1.9.2] 2026-10-13
 
 * **The recorder is a lot lighter.** Build 3 of the

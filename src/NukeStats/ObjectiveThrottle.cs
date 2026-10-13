@@ -2,28 +2,43 @@ using System;
 using System.Collections.Generic;
 using BepInEx.Configuration;
 using HarmonyLib;
+using NuclearOption.SavedMission;
 using UnityEngine;
 
 namespace NukeStats
 {
     // Owner 2026-10-13 ("Yep make those fixes"): DestroyUnits objectives check every target unit every frame.
     //
-    // The mission timers showed it on S2 overnight: on Escalation the "DamageHighValueTargets" objective spent about
-    // 10 ms of every second just asking whether each of its targets was dead, and a few "Threaten..." ones 1-2 ms a second
-    // each (Absolute Escalation's "Secure Island" 6-7 ms on the test server). Each frame the game looks every remaining
-    // target up by name and rebuilds the objective's list of target positions (the HQ sorts its airbases and depots by
-    // those every few seconds; players' markers are worked out on their own machines).
+    // The mission timers showed it on S2: on Escalation the "DamageHighValueTargets" objective spent about 10 ms of every
+    // second just asking whether each of its targets was dead, and a few "Threaten..." ones 1-2 ms a second each. Each
+    // frame the game looks every remaining target up by name and rebuilds the objective's list of target positions (the
+    // HQ sorts its airbases and depots by those every few seconds; players' markers are worked out on their own machines).
     //
     // A dead unit stays dead, so the answer cannot be missed by asking less often. This runs a DestroyUnits check at most
     // every Perf.DestroyCheckSeconds while nothing is changing. The moment a check finds a target destroyed, the next frame
     // checks again, and so on while targets keep dying: the game marks only ONE target per check, so a nuke that kills 30
-    // still registers them on 30 frames in a row, as before. A finished objective completes within that time of its last
-    // target dying. Only DestroyUnits objectives (exact type); everything else runs every frame as before.
+    // still registers them on 30 frames in a row, as before. Only DestroyUnits objectives (exact type).
+    //
+    // HOW (rebuilt 2026-10-13 after the S2 crashes): nothing of the game's objective code is hooked or replaced. Just
+    // before MissionRunner.Update runs, the DestroyUnits objectives that are not due this frame are taken out of its
+    // ActiveObjectives list; a finaliser (it runs even if the game throws) puts them back where they were straight after,
+    // unless the frame stopped or completed them. The game's own loop does everything else. The first build hooked the
+    // check itself, which lives on the generic CompleteOrderObjectiveWithPositions<T>: Mono runs one compiled copy of it for
+    // every T, and a Harmony hook on one T replaces that copy for all of them. Fine for UpdateAndCheck by luck, but the
+    // mission timers' identical hook on CompleteOrderObjective<T>.OnStart built the wrong T's list and crashed the server
+    // 13 times on 10-13. Never hook a method declared on a generic type.
     internal static class ObjectiveThrottle
     {
         internal static ConfigEntry<float> Seconds;
         static Type _destroyT;
+        static bool _on;
         static readonly Dictionary<object, float> _next = new Dictionary<object, float>(new SameObject());
+        static readonly Dictionary<object, float> _before = new Dictionary<object, float>(new SameObject());
+
+        // this frame: the objectives held out (with their place in the list) and the DestroyUnits ones that ran
+        static readonly List<KeyValuePair<int, Objective>> _held = new List<KeyValuePair<int, Objective>>();
+        static readonly List<Objective> _ran = new List<Objective>();
+        static bool _failed;
 
         sealed class SameObject : IEqualityComparer<object>
         {
@@ -40,76 +55,78 @@ namespace NukeStats
             try
             {
                 _destroyT = AccessTools.TypeByName("NuclearOption.SavedMission.Objectives.DestroyUnitObjective");
-                var objT = AccessTools.TypeByName("NuclearOption.SavedMission.Objective");
-                var m = _destroyT != null ? AccessTools.Method(_destroyT, "UpdateAndCheck", Type.EmptyTypes) : null;
-                if (m == null || objT == null) { NukeStatsPlugin.Log?.LogWarning("[objcheck] DestroyUnitObjective.UpdateAndCheck not found: objectives run as before"); return; }
-                // The check lives on the generic base CompleteOrderObjectiveWithPositions<T>. Mono runs ONE compiled copy of it
-                // for every T that is a class (DestroyUnits <SavedUnit>, CaptureAirbase <SavedAirbase>, ReachWaypoints
-                // <Waypoint>), and a hook on any one of them replaces that shared copy - so the mission timers hooking the
-                // others afterwards dropped this one (test server 10-13: no effect). Hook every one of them: whichever is
-                // rebuilt last still carries this. The exact-type test below keeps it to DestroyUnits.
-                var targets = new List<System.Reflection.MethodInfo> { m };
-                var gdef = m.DeclaringType != null && m.DeclaringType.IsGenericType ? m.DeclaringType.GetGenericTypeDefinition() : null;
-                if (gdef != null)
-                {
-                    foreach (var t in AccessTools.GetTypesFromAssembly(objT.Assembly))
-                    {
-                        if (t == null || t.IsAbstract || t.ContainsGenericParameters || !objT.IsAssignableFrom(t)) continue;
-                        var mm = AccessTools.Method(t, "UpdateAndCheck", Type.EmptyTypes);
-                        if (mm != null && !targets.Contains(mm) && mm.DeclaringType != null && mm.DeclaringType.IsGenericType
-                            && mm.DeclaringType.GetGenericTypeDefinition() == gdef) targets.Add(mm);
-                    }
-                }
+                var m = AccessTools.DeclaredMethod(typeof(MissionRunner), "Update", Type.EmptyTypes);
+                if (_destroyT == null || m == null) { NukeStatsPlugin.Log?.LogWarning("[objcheck] DestroyUnitObjective or MissionRunner.Update not found: objectives run as before"); return; }
                 var h = new Harmony(NukeStatsPlugin.Guid + ".objcheck");
-                var pre = new HarmonyMethod(typeof(ObjectiveThrottle).GetMethod(nameof(Pre), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)) { priority = Priority.High };
-                var post = new HarmonyMethod(typeof(ObjectiveThrottle).GetMethod(nameof(Post), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic));
-                int n = 0;
-                foreach (var t in targets)
-                {
-                    try { h.Patch(t, prefix: pre, postfix: post); n++; }
-                    catch (Exception e) { NukeStatsPlugin.Log?.LogWarning("[objcheck] " + t.DeclaringType?.Name + ": " + e.Message); }
-                }
-                NukeStatsPlugin.Log?.LogInfo($"[objcheck] destroy-units objectives checked every {Seconds.Value:0.##} s while idle (0 = every frame); {n} shared method(s) hooked");
+                h.Patch(m,
+                    prefix: new HarmonyMethod(typeof(ObjectiveThrottle).GetMethod(nameof(Hold), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)) { priority = Priority.Low },
+                    finalizer: new HarmonyMethod(typeof(ObjectiveThrottle).GetMethod(nameof(Restore), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)));
+                _on = true;
+                NukeStatsPlugin.Log?.LogInfo($"[objcheck] destroy-units objectives checked every {Seconds.Value:0.##} s while idle (0 = every frame); MissionRunner.Update list hold");
             }
             catch (Exception e) { NukeStatsPlugin.Log?.LogWarning("[objcheck] not applied, objectives run as before: " + e.Message); }
         }
 
-        // the shared base method (CompleteOrderObjectiveWithPositions<T>.UpdateAndCheck) also runs other objective types:
-        // only DestroyUnits is ever held back. __state = the objective's progress before a real check, NaN = not ours/held.
-        static bool Pre(object __instance, ref bool __result, out float __state)
+        // before the game's loop: take out the DestroyUnits objectives that are not due; note the progress of the ones that run
+        static void Hold(MissionRunner __instance)
         {
-            __state = float.NaN;
+            _held.Clear();
+            _ran.Clear();
             try
             {
                 float s = Seconds != null ? Seconds.Value : 0f;
-                if (s <= 0f || __instance == null || __instance.GetType() != _destroyT) return true;
+                if (!_on || _failed || s <= 0f || __instance == null) return;
+                var list = __instance.ActiveObjectives;
                 float now = Time.realtimeSinceStartup;
-                if (_next.TryGetValue(__instance, out float t) && now < t)
+                for (int i = 0; i < list.Count; i++)
                 {
-                    __result = false;           // not complete yet: asked again soon
-                    return false;
+                    var o = list[i];
+                    if (o == null || o.GetType() != _destroyT) continue;
+                    if (_next.TryGetValue(o, out float t) && now < t) _held.Add(new KeyValuePair<int, Objective>(i, o));
+                    else { _ran.Add(o); _before[o] = o.CompletePercent; }
                 }
-                __state = Progress(__instance);
+                for (int k = _held.Count - 1; k >= 0; k--) list.RemoveAt(_held[k].Key);   // from the back: indices stay valid
             }
-            catch { __state = float.NaN; }
-            return true;
+            catch (Exception e) { Fail(e); }
         }
 
-        static void Post(object __instance, bool __result, float __state)
+        // after the game's loop (always, even if it threw): put the held ones back where they were, unless this frame
+        // stopped or completed them; schedule each DestroyUnits objective that ran
+        static Exception Restore(MissionRunner __instance, Exception __exception)
         {
-            if (float.IsNaN(__state)) return;
             try
             {
-                if (__result) { _next.Remove(__instance); return; }
+                if (__instance != null && _held.Count > 0)
+                {
+                    var list = __instance.ActiveObjectives;
+                    foreach (var kv in _held)
+                    {
+                        var o = kv.Value;
+                        if (o.Status != ObjectiveStatus.Running || list.Contains(o)) { _next.Remove(o); continue; }
+                        list.Insert(Math.Min(kv.Key, list.Count), o);
+                    }
+                }
                 float now = Time.realtimeSinceStartup;
-                // a target died in this check: look again next frame (the game marks one per check), else wait
-                _next[__instance] = Progress(__instance) != __state ? now : now + (Seconds != null ? Seconds.Value : 0f);
-                if (_next.Count > 512) _next.Clear();   // objectives from old missions (a new mission builds new ones)
+                float s = Seconds != null ? Seconds.Value : 0f;
+                foreach (var o in _ran)
+                {
+                    if (o.Status != ObjectiveStatus.Running) { _next.Remove(o); _before.Remove(o); continue; }
+                    float before = _before.TryGetValue(o, out float b) ? b : -1f;
+                    // a target died in this check: look again next frame (the game marks one per check), else wait
+                    _next[o] = o.CompletePercent != before ? now : now + s;
+                }
+                if (_next.Count > 512) { _next.Clear(); _before.Clear(); }   // objectives from old missions
             }
-            catch { }
+            catch (Exception e) { Fail(e); }
+            finally { _held.Clear(); _ran.Clear(); }
+            return __exception;          // the game's own exception, if any, untouched
         }
 
-        // the game's own progress figure for the objective (share of targets marked destroyed)
-        static float Progress(object o) => ((NuclearOption.SavedMission.Objective)o).CompletePercent;
+        static void Fail(Exception e)
+        {
+            if (_failed) return;
+            _failed = true;               // from now on the game's own behaviour (every frame)
+            NukeStatsPlugin.Log?.LogError("[objcheck] error, destroy-units objectives back to every frame: " + e);
+        }
     }
 }
