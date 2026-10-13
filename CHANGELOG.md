@@ -30,6 +30,9 @@ What changed in each public release. Every GitHub release shows its own section 
   with particles nobody sees on a server (flares and chaff are left alone), and `Perf.FramePacer` has the
   plugin pace the frames in place of Unity's frame cap. The first two are on on my servers. The frame pacer
   made no difference on Windows and I haven't tested it on a Linux host yet.
+* **All of these are in the dashboard.** The three switches, the objective check interval and the stuck player
+  release are in the Settings menu, under AI & Performance and Anti-Grief, and they change straight away with no
+  restart.
 * **Smaller fixes.** The console history keeps 20 copies of one line a minute and counts the rest, given one
   player's full network queue logged the same error 22,075 times in 33 seconds and the day's earlier history
   was trimmed away. The ban log ignores the same offence logged twice within 30 seconds. Mission time warnings

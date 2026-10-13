@@ -816,6 +816,58 @@
    "gameplay": false
   },
   {
+   "key": "Perf.SkipVisualEffects",
+   "friendlyName": "Skip Visual Effects",
+   "group": "AI & Performance",
+   "owner": "plugin",
+   "type": "toggle",
+   "default": "false",
+   "live": "live",
+   "commonlyChanged": false,
+   "adminDescription": "Turns off wing vapour, propeller spin and the smoke trail emitter on the server. They are visual only and nothing else in the game reads them. About 10 ms a second with 40 AI on the test server. Changes within a second.",
+   "gameplay": false
+  },
+  {
+   "key": "Perf.SkipServerParticles",
+   "friendlyName": "Skip Server Particles",
+   "group": "AI & Performance",
+   "owner": "plugin",
+   "type": "toggle",
+   "default": "false",
+   "live": "live",
+   "commonlyChanged": false,
+   "adminDescription": "Particle effects on the server hold no particles, given nobody sees them there. Nothing is emptied, so missile motors still start, and flares and chaff are never touched. About 3% more frames on the test server. Changes within a few seconds.",
+   "gameplay": false
+  },
+  {
+   "key": "Perf.FramePacer",
+   "friendlyName": "Frame Pacer",
+   "group": "AI & Performance",
+   "owner": "plugin",
+   "type": "int",
+   "default": "0",
+   "min": "0",
+   "max": "240",
+   "live": "live",
+   "commonlyChanged": false,
+   "adminDescription": "0 = off, and the server uses Server Frame Rate Target. 60 to 240 = the plugin paces frames to exactly that many a second in place of the game's frame cap (anything under 60 counts as 60). Only while a mission runs. It made no difference on Windows in testing and is untested on a Linux host.",
+   "gameplay": false
+  },
+  {
+   "key": "Perf.DestroyCheckSeconds",
+   "friendlyName": "Destroy Objective Check Interval (s)",
+   "group": "AI & Performance",
+   "owner": "plugin",
+   "type": "float",
+   "default": "0.25",
+   "min": "0",
+   "max": "2",
+   "live": "live",
+   "commonlyChanged": false,
+   "adminDescription": "How often a destroy-units objective checks its targets while none of them are dying. When a check finds one destroyed the next frame checks again, so kills register as fast as before. 0 = every frame (the game's own way). Changes straight away.",
+   "gameplay": false
+  },
+  {
    "key": "Teamkill.Enforce",
    "friendlyName": "Teamkill Punishment",
    "group": "Moderation",
@@ -1183,6 +1235,20 @@
    "live": "live",
    "commonlyChanged": true,
    "adminDescription": "Kicks a player after this many dead-unit commands within 10 seconds; orders already in flight when the unit died never count. 0 = off (drop only). Needs Drop Dead-NetId RPCs ON; honours Report Only and admin exemption.",
+   "gameplay": false
+  },
+  {
+   "key": "Flood.SingleVictimReleaseSeconds",
+   "friendlyName": "Stuck Player Release (s)",
+   "group": "Anti-Grief",
+   "owner": "plugin",
+   "type": "float",
+   "default": "5",
+   "min": "0",
+   "max": "60",
+   "live": "live",
+   "commonlyChanged": false,
+   "adminDescription": "When one player's send buffer stays full on its own for this many seconds, the game may disconnect just that player so they can rejoin, in place of sitting frozen until the game times them out (about 30 s). A flood that fills two or more players' buffers is still blocked. 0 = never let go.",
    "gameplay": false
   },
   {
