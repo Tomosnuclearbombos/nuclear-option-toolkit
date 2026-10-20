@@ -16,6 +16,22 @@
   </ItemGroup>
 
   <!--
+    The self-test (SelfTest*.cs) runs the Server Tester's automated test on the server itself. It builds the steps, makes
+    the picks, analyses and writes the results with the tester's own code, linked from src/ServerTester/Engine, so the
+    two always agree. Those files may only use .NET Standard 2.1.
+  -->
+  <ItemGroup>
+    <Compile Include="../ServerTester/Engine/CpuLayout.cs" Link="Shared/CpuLayout.cs" />
+    <Compile Include="../ServerTester/Engine/TestPlan.cs" Link="Shared/TestPlan.cs" />
+    <Compile Include="../ServerTester/Engine/Analysis.cs" Link="Shared/Analysis.cs" />
+  </ItemGroup>
+
+  <!-- the test mission the self-test serves (MissionGroup.UserGroup.TryGetJson), only while a test runs -->
+  <ItemGroup>
+    <EmbeddedResource Include="../ServerTester/missions/Stress Test/Stress Test.json" LogicalName="NukeStats.StressTest.json" />
+  </ItemGroup>
+
+  <!--
     Drop the referenced DLLs into a sibling  ./libs/  folder before building.
     Get them from:
       * the server container: NuclearOptionServer_Data/Managed/  (Assembly-CSharp*.dll,

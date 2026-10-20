@@ -115,6 +115,15 @@ namespace NukeStats
         static float _next;
         static bool _wasOn;
 
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change: the ended mission object is let go. The
+        // placeholder is never the current mission, so the next tick resets the per-mission state exactly as it would have.
+        internal static int ReleaseOldMission()
+        {
+            if (!MemHygiene.OldMission(_mission)) return 0;
+            _mission = MemHygiene.Released;
+            return 1;
+        }
+
         static void Reset(string why)
         {
             if (_strikes.Count > 0 || _warnedAt.Count > 0) NukeStatsPlugin.Log?.LogInfo("[pingkick] reset (" + why + ")");

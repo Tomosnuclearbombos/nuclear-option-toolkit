@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Nuclear Option Server Tester: a portable desktop program (Windows and Linux) that sets up a private test server, runs a
+    stress test and finds the cores and physics workers a Nuclear Option server needs.
+
+    Build a portable single file:
+      dotnet publish -c Release -r win-x64   (or linux-x64)
+    The publish settings below make one self-contained program file with its graphics libraries beside it (so nothing
+    is unpacked into a temp folder at start-up): nothing to install on the machine that runs it.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ServerTester</AssemblyName>
+    <RootNamespace>ServerTester</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>Nuclear Option Server Tester</Product>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <!-- the Windows-only and Linux-only calls are behind runtime checks (Native.IsWindows / IsLinux) -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Simple" Version="11.3.22" />
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="9.0.0" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.22" />
+  </ItemGroup>
+
+  <!-- BepInEx, the doorstop loaders and the Server Tester build of NukeStats; made by the package script -->
+  <ItemGroup Condition="Exists('payload/payload.zip')">
+    <EmbeddedResource Include="payload/payload.zip" LogicalName="ServerTester.payload.zip" />
+  </ItemGroup>
+
+</Project>

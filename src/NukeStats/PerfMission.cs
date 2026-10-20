@@ -147,6 +147,39 @@ namespace NukeStats
         // from Perf.FrameBoundary, after the hitch check
         internal static void FrameReset() { if (_frame.Count > 0) _frame.Clear(); }
 
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change: the minute's timings keep the ended mission's
+        // objective and outcome objects as keys until the next perf line (up to 60 s), which kept that whole mission alive
+        // through the game's own clean-up. Each entry keeps only what the perf line prints of it (name, type, unit count),
+        // so the next line shows the same entries. The frame list (hitch lines) is per frame and simply emptied.
+        sealed class Named { public string Name, Type; public int Units = -1; }
+
+        // Entries of the current mission (only possible on the stand-in tick, inside a new mission) keep their object.
+        internal static int ReleaseOldMission()
+        {
+            int n = _frame.Count;
+            _frame.Clear();
+            HashSet<object> current = null;
+            foreach (var d in _minute)
+            {
+                if (d.Count == 0) continue;
+                if (current == null) current = MemHygiene.CurrentMissionObjects();
+                var keep = new List<Agg>(d.Values);
+                d.Clear();
+                foreach (var a in keep)
+                {
+                    if (!(a.who is Named) && !current.Contains(a.who))
+                    {
+                        var nm = new Named();
+                        try { Describe(a.who, out nm.Name, out nm.Type, out nm.Units); } catch { }
+                        a.who = nm;
+                        n++;
+                    }
+                    d[a.who] = a;
+                }
+            }
+            return n;
+        }
+
         // a hitch line: this frame's biggest mission work
         internal static void AppendFrame(StringBuilder sb)
         {
@@ -213,6 +246,7 @@ namespace NukeStats
         static void Describe(object who, out string name, out string type, out int units)
         {
             name = null; type = null; units = -1;
+            if (who is Named nm) { name = nm.Name; type = nm.Type; units = nm.Units; return; }   // MemHygiene: an ended mission's entry
             if (who is NuclearOption.SavedMission.Objective o)
             {
                 name = o.SavedObjective?.UniqueName;

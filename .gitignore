@@ -88,6 +88,11 @@ mapdata/
 **/NukeStats/libs/
 **/NukeStats/bin/
 **/NukeStats/obj/
+**/ServerTester/bin/
+**/ServerTester/obj/
+**/ServerTester/payload/
+**/ServerTester/dist/
+**/ServerTester/data/
 **/NukeStats/bepinex_pack/
 **/NukeStats/bepinex_pack_win/
 

@@ -2,6 +2,16 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [1.9.12] 2026-10-20
+
+* **Server test.** The plugin can now test your server and find the best settings for it. Start it from the Server test card in the dashboard's Settings. It waits until the server is empty and puts it back as it was.
+* **Apply test results.** The dashboard can now apply the results of a server test under Game Settings.
+* **Nuke fix for dense locations.** The game only tracked 4096 objects per blast. The limit has been increased. It's set with `NukeBlast.ColliderBuffer` (8192).
+* **Missile fix.** Missiles that went off right after their motor burned out, the NL-98 most often, never exploded and stayed in the world until the mission ended. They now explode.
+* **Results fix.** Only the first ending of a mission counts now. A Defeat ending counts as a win for the other side.
+* **Fires fix.** With `Perf.SkipServerParticles` on, fires that do damage went out within seconds instead of burning for minutes. They're now left alone.
+* **Memory clean-up.** The server now lets go of what each ended mission leaves behind, so it uses less memory as the day goes on.
+
 ## [1.9.3] 2026-10-13
 
 * **Crash fix.** 1.9.2 could crash the game server when `Perf.Timing` was on. The mission timers hooked code the game

@@ -128,5 +128,23 @@ namespace NukeStats
             _failed = true;               // from now on the game's own behaviour (every frame)
             NukeStatsPlugin.Log?.LogError("[objcheck] error, destroy-units objectives back to every frame: " + e);
         }
+
+        // MemHygiene.ClearObjectiveThrottle (2026-10-15), at a mission change with no mission running. An objective still
+        // running when its mission ended keeps the status Running for ever (nothing completes or cleans it up), so it never
+        // left these tables (only the 512 limit cleared them) and each one kept its old mission in memory: its target units,
+        // their FactionHQ and most of what hangs off it (test server: tens of MB after a few missions). The schedule is ours
+        // alone; a new mission's objectives are new objects, so their first check simply runs at once, as on a fresh start.
+        // Objectives of the current mission (only possible on the stand-in tick, inside a new mission) are kept.
+        internal static int ReleaseOldMission()
+        {
+            var current = MemHygiene.CurrentMissionObjects();
+            var gone = new List<object>();
+            foreach (var k in _next.Keys) if (!current.Contains(k)) gone.Add(k);
+            foreach (var k in _before.Keys) if (!current.Contains(k) && !_next.ContainsKey(k)) gone.Add(k);
+            foreach (var k in gone) { _next.Remove(k); _before.Remove(k); }
+            _held.Clear();                // per frame, empty between frames anyway
+            _ran.Clear();
+            return gone.Count;
+        }
     }
 }

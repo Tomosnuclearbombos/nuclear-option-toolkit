@@ -531,10 +531,15 @@ try{if(localStorage.getItem('nocc_theme')==='light')document.documentElement.set
 <!-- plugin / server settings -->
 <div class="ov" id="setOv" onmousedown="_ovmd(event)" onclick="_ovmu(event)">
   <div class="modal" style="max-width:980px;width:94vw"><div class="mh"><b>⚙ Game Settings</b>
-    <span class="sp"></span><button class="sm" onclick="closeOv()">close</button></div>
+    <span class="sp"></span><button class="sm" onclick="selftestOpen()" title="NukeStats runs the Server Tester's automated test on this server while nobody is on">Server test</button>
+    <button class="sm" onclick="testerPick()" title="Load the results.json the Nuclear Option Server Tester made and apply its suggested settings">Apply Server Tester results</button>
+    <input type="file" id="testerFile" accept=".json,application/json" style="display:none" onchange="testerLoad(this)">
+    <button class="sm" onclick="closeOv()">close</button></div>
     <div class="mb">
       <input id="setSearch" placeholder="🔍 search every setting…" aria-label="Search all game settings" style="width:100%;background:#0a0f17;border:1px solid var(--bd);border-radius:8px;color:var(--txt);padding:8px 11px;margin-bottom:9px" oninput="setPending=null;renderSettings()">
       <div id="setMsg" class="dim" role="status" aria-live="polite" aria-atomic="true" style="min-height:16px;margin-bottom:6px"></div>
+      <div id="selftestBox" style="display:none"></div>
+      <div id="testerBox" style="display:none"></div>
       <div class="setwrap">
         <div id="setNav" class="setnav" role="tablist" aria-orientation="vertical" aria-label="Setting categories">loading…</div>
         <div id="setPane" class="setpane" role="tabpanel" aria-label="Settings in the selected category" tabindex="0"></div>
@@ -2116,6 +2121,7 @@ async function tick(){const _g=(tick._gen=(tick._gen||0)+1);try{
   if(st.shared_ranks&&Date.now()>=_settleAt){sharedRanksLive=st.shared_ranks;if($('#lbOv').classList.contains('on')&&!$('#lbShared').contains(document.activeElement))renderSharedRanks();}
   if(st.reports){serverReports=st.reports;updateRepBtn();}
   if(st.banned_players){bannedPlayers=st.banned_players;}
+  _selftest=st.selftest||null; if($('#setOv').classList.contains('on'))selftestShow();
   if(st.ban_log){banLog=st.ban_log;}
   if($('#repOv').classList.contains('on')){ if($('#banPane')&&$('#banPane').style.display!=='none')renderBanned(); else renderReports(); }
   if(st.sys_messages&&Date.now()>=_settleAt){sysMessages=st.sys_messages;if($('#msgOv').classList.contains('on'))renderSysMessages();}
@@ -2585,6 +2591,102 @@ function _setMerge(data){
     else s.value=o.v;
   }
   return data;
+}
+// ── NukeStats Server Tester results: the file is read here, checked and applied by /api/tester-results ──
+let _testerRes=null;
+function testerPick(){ const f=$('#testerFile'); f.value=''; f.click(); }
+function testerLoad(input){
+  const file=input.files&&input.files[0]; if(!file) return;
+  if(file.size>5*1024*1024){ $('#setMsg').innerHTML='<span class="er">✗ that file is too big to be a results.json</span>'; return; }
+  const rd=new FileReader();
+  rd.onload=async function(){
+    let res; try{ res=JSON.parse(rd.result); }catch(e){ $('#setMsg').innerHTML='<span class="er">✗ not a JSON file</span>'; return; }
+    const r=await jpost('/api/tester-results',{results:res});
+    if(!r||!r.ok){ $('#setMsg').innerHTML='<span class="er">✗ '+esc((r&&r.error)||'failed')+'</span>'; return; }
+    _testerRes=res; testerShow(r);
+  };
+  rd.readAsText(file);
+}
+function _curVal(key){
+  const all=(settingsData&&settingsData.settings)||[];
+  const row=all.find(function(x){return x.key===key;});
+  return row?String(row.value!=null?row.value:row.default):'?';
+}
+function testerShow(r){
+  let h='<div style="border:1px solid var(--ac);border-radius:8px;padding:11px 13px;margin-bottom:10px;background:rgba(90,160,255,.06)">'
+    +'<div style="font-size:13px;margin-bottom:6px"><b>Server Tester results</b> <span class="dim">'+esc(r.cpu)+(r.date?' · '+esc(r.date.slice(0,16).replace('T',' ')):'')+'</span></div>';
+  if(r.stopped) h+='<div style="font-size:12px;color:#ffce7a;margin-bottom:6px">The test stopped early ('+esc(r.stopped)+'), so these come from part of a run.</div>';
+  if(r.rows.length){
+    h+='<table style="font-size:12px;margin-bottom:8px">';
+    r.rows.forEach(function(x){ h+='<tr><td style="padding:2px 12px 2px 0">'+esc(x.friendlyName)+'</td><td class="dim">'+esc(_curVal(x.key))+' →</td><td style="padding-left:6px"><b>'+esc(x.value)+'</b></td></tr>'; });
+    h+='</table>';
+  } else h+='<div style="font-size:12px;margin-bottom:6px">The file has no plugin settings to apply.</div>';
+  if(r.cores>0) h+='<div style="font-size:12px;margin-bottom:6px">CPUs: the server needs no more than its <b>'+r.cores+'</b> fastest cores'+(r.cpus?' (CPUs '+esc(r.cpus)+(r.affinityHex?', Windows mask '+esc(r.affinityHex):'')+')':'')+(r.fastOnly?', fast cores only':'')+'. Pinning is set on the machine that runs the server; the tester\'s Apply window shows how.</div>';
+  (r.findings||[]).forEach(function(f){ h+='<div class="dim" style="font-size:11px">· '+esc(f)+'</div>'; });
+  h+='<div style="display:flex;gap:8px;margin-top:9px">'
+    +(r.rows.length?'<button onclick="testerApply()" style="border:1px solid #1c5;background:#0c3a24;color:#5df2a0;border-radius:6px;cursor:pointer;padding:7px 16px;font-weight:700">Apply</button>':'')
+    +'<button onclick="testerCancel()" style="border:1px solid var(--bd);background:#1a2230;color:var(--txt);border-radius:6px;cursor:pointer;padding:7px 16px">Close</button></div></div>';
+  const box=$('#testerBox'); box.innerHTML=h; box.style.display='';
+}
+// ── NukeStats server test: the plugin runs the Server Tester's automated test on this server while nobody is on. Start
+// and stop go to the bot (/api/selftest); progress comes in /api/state's "selftest"; the results once the bot has them.
+let _selftest=null,_selftestOpen=false,_selftestSig='';
+const _ST_BUSY=['pending','preparing','loading','filling','warmup','running','restoring'];
+const _ST_TEXT={idle:'No test running.',pending:'Waiting for the server to be empty',preparing:'Getting ready',loading:'Loading the test mission',
+  filling:'Filling up the AI aircraft',warmup:'Warming up',running:'Running',restoring:'Putting the server back as it was',
+  done:'Finished. The server is back as it was.',stopped:'Stopped. The server is back as it was.',aborted:'Stopped early. The server is back as it was.',refused:'Not started'};
+const _ST_ROUND={1:'Round 1: cores and workers, at 90 fps',2:'Round 2: frame target',3:'Round 3: AI load'};
+function _stPair(p){ const m=/^(.*)x(\d+)$/.exec(p||''); if(!m) return esc(p||'');
+  const c=m[1]==='every'?'every core':m[1]==='all'?'all cores':m[1]+(m[1]==='1'?' core':' cores'); return esc(c)+', '+m[2]+(m[2]==='1'?' worker':' workers'); }
+function selftestOpen(){ _selftestOpen=true; _selftestSig=''; selftestShow(); }
+function selftestClose(){ _selftestOpen=false; const b=$('#selftestBox'); b.innerHTML=''; b.style.display='none'; }
+function selftestShow(){
+  if(!_selftestOpen) return;
+  const s=_selftest, busy=!!s&&_ST_BUSY.indexOf(s.state)>=0, ended=!!s&&['done','stopped','aborted'].indexOf(s.state)>=0;
+  const sig=JSON.stringify(s||{})+(s&&s.age>90?'old':''); if(sig===_selftestSig) return; _selftestSig=sig;
+  let h='<div style="border:1px solid var(--ac);border-radius:8px;padding:11px 13px;margin-bottom:10px;background:rgba(90,160,255,.06)">'
+    +'<div style="font-size:13px;margin-bottom:6px"><b>Server test</b> <span class="dim">NukeStats runs the Server Tester\'s automated test on this server while nobody is on. It stops the moment anyone joins, and everything goes back as it was.</span></div>';
+  if(!s) h+='<div style="font-size:12px">No word from the plugin about a test yet.</div>';
+  else{
+    h+='<div style="font-size:12px;margin-bottom:4px"><b>'+esc(_ST_TEXT[s.state]||s.state)+'</b>'+(s.why?' <span class="dim">('+esc(s.why)+')</span>':'')+'</div>';
+    if(busy&&s.steps){
+      h+='<div style="font-size:12px">'+esc(_ST_ROUND[s.round]||'')+(s.step?' · step '+s.step+' of '+s.steps+(s.label?': '+esc(s.label):''):'')
+        +(s.eta_s>0?' · about '+Math.max(1,Math.round(s.eta_s/60))+' minutes left':'')+'</div>';
+      if(s.last&&s.last.fps!=null) h+='<div class="dim" style="font-size:12px">Last measurement: '+s.last.fps+' fps, busy '+s.last.busy+' ms a frame, '+s.last.ai+' AI aircraft</div>';
+    }
+    if(s.pick&&(s.pick.pair||s.pick.target>0)) h+='<div style="font-size:12px">Picked: '+(s.pick.pair?_stPair(s.pick.pair):'')+(s.pick.target>0?(s.pick.pair?', ':'')+'target '+s.pick.target+' fps':'')+'</div>';
+    if(busy&&s.age>90) h+='<div style="font-size:12px;color:#ffce7a">No word from the server for '+Math.round(s.age)+' seconds.</div>';
+  }
+  const btn='border-radius:6px;cursor:pointer;padding:7px 16px;';
+  h+='<div style="display:flex;gap:8px;margin-top:9px">'
+    +(busy?'<button onclick="selftestDo(\'stop\')" style="'+btn+'border:1px solid #c44;background:#3a1010;color:#ff8f8f;font-weight:700">Stop the test</button>'
+          :'<button onclick="selftestDo(\'start\')" style="'+btn+'border:1px solid #1c5;background:#0c3a24;color:#5df2a0;font-weight:700">Start the test</button>')
+    +(ended?'<button onclick="selftestResults()" style="'+btn+'border:1px solid var(--ac);background:#10203a;color:var(--txt)">Show the results</button>':'')
+    +'<button onclick="selftestClose()" style="'+btn+'border:1px solid var(--bd);background:#1a2230;color:var(--txt)">Close</button></div></div>';
+  const box=$('#selftestBox'); box.innerHTML=h; box.style.display='';
+}
+async function selftestDo(op){
+  if(op==='start'&&!confirm('Start the server test?\n\nIt runs the automated test with the plugin\'s SelfTest settings and takes about an hour. It begins once the server has been empty for 2 minutes, and stops the moment anyone joins.')) return;
+  const r=await jpost('/api/selftest',{op:op});
+  $('#setMsg').innerHTML=r&&r.ok?'<span class="ok">✓ '+(op==='start'?'start':'stop')+' sent to the server</span>':'<span class="er">✗ '+esc((r&&r.error)||'failed')+'</span>';
+}
+async function selftestResults(){
+  const d=await jget('/api/selftest-results');
+  if(!d||!d.ok||!d.results){ $('#setMsg').innerHTML='<span class="info">The results aren\'t here yet. They come over from the server a few seconds after the test ends.</span>'; return; }
+  const r=await jpost('/api/tester-results',{results:d.results});
+  if(!r||!r.ok){ $('#setMsg').innerHTML='<span class="er">✗ '+esc((r&&r.error)||'failed')+'</span>'; return; }
+  _testerRes=d.results; testerShow(r);
+}
+function testerCancel(){ _testerRes=null; const box=$('#testerBox'); box.innerHTML=''; box.style.display='none'; }
+async function testerApply(){
+  if(!_testerRes) return;
+  const r=await jpost('/api/tester-results',{results:_testerRes,apply:true});
+  if(r&&r.ok){
+    $('#setMsg').innerHTML='<span class="ok">✓ queued: '+esc((r.applied||[]).join(', '))+'</span>';
+    (r.rows||[]).forEach(function(x){ _pollSetcfgAck(x.key, String(x.value), Date.now()/1000 - 1); });
+    testerCancel();
+    setTimeout(_setRefetch,4000); setTimeout(_setRefetch,12000);
+  } else $('#setMsg').innerHTML='<span class="er">✗ '+esc((r&&r.error)||'failed')+'</span>';
 }
 async function _setRefetch(){
   if(!$('#setOv').classList.contains('on')||setPending) return;   // modal closed / user mid-edit

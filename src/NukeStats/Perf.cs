@@ -31,7 +31,11 @@ namespace NukeStats
         internal static ConfigEntry<bool> SkipVisualConstraints;
         internal static ConfigEntry<int> HitchMs;
 
-        const float ReportSec = 60f;
+#if TESTER_BUILD
+        static float ReportSec => 15f;   // the Server Tester's own build: a measurement every 15 s
+#else
+        static float ReportSec => SelfTest.Active ? 15f : 60f;   // the self-test measures every 15 s too, as the tester
+#endif
 
         internal static void Initialize(ConfigFile config)
         {
@@ -132,7 +136,7 @@ namespace NukeStats
         // The plugin's own per-frame work, in PeriodicTick order (Lap(n) after each call there).
         internal static readonly string[] PlugNames =
         {
-            "PerfTick", "RttProbe", "FactionColours", "PvETimeout", "", "Annihilate", "", "PingKick",
+            "PerfTick", "RttProbe", "FactionColours", "PvETimeout", "SelfTest", "Annihilate", "", "PingKick",
             "TkWatch", "Names", "WebNames", "JoinAnnounces", "Snapshot", "CleanupPilots", "Balance", "PendingBalance",
             "Bounces", "Life", "Pos", "MapEnt", "Tk", "", "Grief", "AirPanel", "Catchup", "RankFunds",
             "LimboWatch", "Commands", "", "Perf",   // a blank name = a slot this build does not use (not printed)
@@ -156,7 +160,19 @@ namespace NukeStats
         static int _frames;
         static double _ftSum;
         static float _ftMax;
-        static readonly int[] _ftHist = new int[251];   // 1 ms bins, the last one = 250 ms or more
+        // frame times: 0.1 ms bins up to 50 ms (fine enough for the 5% and 1% lows at 200 fps), then 1 ms bins, the
+        // last one = 250 ms or more
+        static readonly int[] _ftHist = new int[701];
+        static int FtBin(float ms) => ms < 50f ? Mathf.Max(0, (int)(ms * 10f)) : Mathf.Min(700, 500 + (int)(ms - 50f));
+        static double FtBinMs(int i) => i < 500 ? (i + 0.5) / 10.0 : 50 + (i - 500) + 0.5;
+
+        // the frame time this share of the window's frames were at or under (0.95: the slowest 5% were longer)
+        static double FtPercentile(double q)
+        {
+            int need = (int)Math.Ceiling(_frames * q), seen = 0;
+            for (int i = 0; i < _ftHist.Length; i++) { seen += _ftHist[i]; if (seen >= need) return FtBinMs(i); }
+            return 0;
+        }
         static float _windowStart = -1f;
         static long _rankLoadTicks; static int _rankLoads;
         static long _logChars; static int _logLines;
@@ -241,6 +257,9 @@ namespace NukeStats
             _spOuter = false;
             NukeStatsPlugin.Log?.LogInfo("[perf] timing off");
         }
+
+        // The Server Tester's own switches (its build's PretendPlayers and TestAiAircraft) and its AI load are in SelfTest.cs,
+        // with the self-test that runs the same test on a live server.
 
         static void Pre(out long __state) { __state = Stopwatch.GetTimestamp(); }
 
@@ -588,7 +607,7 @@ namespace NukeStats
             try { gc = GC.CollectionCount(0); } catch { }
             try
             {
-                int limit = HitchMs != null ? HitchMs.Value : 0;
+                int limit = SelfTest.Overriding ? 0 : HitchMs != null ? HitchMs.Value : 0;   // no hitch lines during a self-test, as the tester
                 if (_frameStart != 0 && limit > 0)
                 {
                     double ms = (now - _frameStart) * 1000.0 / Stopwatch.Frequency;
@@ -726,7 +745,7 @@ namespace NukeStats
                 _frames++;
                 _ftSum += ms;
                 if (ms > _ftMax) _ftMax = ms;
-                _ftHist[Mathf.Clamp((int)ms, 0, 250)]++;
+                _ftHist[FtBin(ms)]++;
                 if (now - _windowStart >= ReportSec) Report(now);
             }
             if (now < _nextCheck) return;
@@ -735,17 +754,19 @@ namespace NukeStats
             try { running = MissionManager.IsRunning; } catch { }
             if (!running) { _runningSince = -1f; if (_spSeen.Count > 0) _spSeen.Clear(); }   // a new mission: "first" again
             else if (_runningSince < 0f) _runningSince = now;
-            bool want = Timing != null && Timing.Value;
+            bool want = (Timing != null && Timing.Value) || SelfTest.Overriding;   // the self-test times every frame while it runs
             // The hooks only go in once a mission has been running for 1 s. Installed in the first frames after
             // a start (Timing saved on in the config) they aborted the game (2026-10-06, S1: signal 6 inside
             // Harmony.Patch); switched on mid-mission they always worked.
             if (want && !_on && running && now - _runningSince >= InstallAfterSec) Install();
             else if (!want && _on) Uninstall();
-            bool wantPhases = _on && Phases != null && Phases.Value;
+            bool wantPhases = _on && ((Phases != null && Phases.Value) || SelfTest.Overriding);
             if (wantPhases && !_phasesOn) PhasesInstall();
             else if (!wantPhases && _phasesOn) PhasesUninstall();
             PatchSafety.AuditOnce();          // every hook checked once after start (Awake hooks are in)
             PerfExtra.Tick1s(running, now);   // 1.9.2
+            if (running) SelfTest.AiTick1s();   // the Server Tester's AI load (its own build, or the self-test on its mission)
+            MemHygiene.Tick1s(now);           // 2026-10-15: notes running missions; fallback trigger of the mission-change clean-up
             ApplyWorkers();
             ApplyFps();
             ApplySkips(running);
@@ -766,6 +787,7 @@ namespace NukeStats
         //    particle switch, remove it".
         static bool _scanAnim, _scanCon;
         static readonly HashSet<int> _seenUnits = new HashSet<int>();
+        static readonly HashSet<int> _liveUnitIds = new HashSet<int>();   // scratch for the prune
         static readonly List<KeyValuePair<Animator, AnimatorCullingMode>> _animsOff = new List<KeyValuePair<Animator, AnimatorCullingMode>>();
         static readonly List<Behaviour> _consOff = new List<Behaviour>();
         static float _nextPrune;
@@ -774,8 +796,8 @@ namespace NukeStats
         {
             try
             {
-                bool wantAnim = SkipPilotAnimation != null && SkipPilotAnimation.Value;
-                bool wantCon = SkipVisualConstraints != null && SkipVisualConstraints.Value;
+                bool wantAnim = SelfTest.SkipsOverride ?? (SkipPilotAnimation != null && SkipPilotAnimation.Value);
+                bool wantCon = SelfTest.SkipsOverride ?? (SkipVisualConstraints != null && SkipVisualConstraints.Value);
                 if (!wantAnim && _animsOff.Count > 0) RestoreAnims();
                 if (!wantCon && _consOff.Count > 0) RestoreConstraints();
                 if (wantAnim != _scanAnim || wantCon != _scanCon || !running) _seenUnits.Clear();   // look at every unit again
@@ -816,6 +838,11 @@ namespace NukeStats
                     _nextPrune = now + 30f;
                     _animsOff.RemoveAll(p => p.Key == null);
                     _consOff.RemoveAll(c => c == null);
+                    // 2026-10-15: forget units that are gone (the list kept every unit of the mission until it ended)
+                    _liveUnitIds.Clear();
+                    foreach (Unit u in UnitRegistry.allUnits) if (u != null) _liveUnitIds.Add(u.GetInstanceID());
+                    _seenUnits.IntersectWith(_liveUnitIds);
+                    _liveUnitIds.Clear();
                 }
             }
             catch (Exception e) { NukeStatsPlugin.Log?.LogError("[perf] skips: " + e.Message); }
@@ -828,6 +855,16 @@ namespace NukeStats
             c.enabled = false;
             _consOff.Add(c);
             return 1;
+        }
+
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change: destroyed animators and constraints of the
+        // ended mission now (the 30 s prune above only runs while a mission runs, so they stayed until the next one).
+        internal static int ReleaseOldMission()
+        {
+            int n = 0;
+            if (_animsOff.Count > 0) n += _animsOff.RemoveAll(p => p.Key == null);
+            if (_consOff.Count > 0) n += _consOff.RemoveAll(c => c == null);
+            return n;
         }
 
         static void RestoreAnims()
@@ -854,7 +891,7 @@ namespace NukeStats
         {
             try
             {
-                int want = TargetFps != null ? TargetFps.Value : 0;
+                int want = SelfTest.TargetOverride ?? (TargetFps != null ? TargetFps.Value : 0);   // a self-test's step sets its own, in memory
                 if (want != 0 && want < 60) want = 0;                    // never a cap below the game's 60
                 if (want > 240) want = 240;
                 bool waiting = GameManager.gameState == GameState.ServerWaiting;
@@ -896,7 +933,9 @@ namespace NukeStats
         {
             try
             {
-                int want = JobWorkers != null ? JobWorkers.Value : 0;
+                // a self-test's step sets its own, in memory; its 0 asks for the game's own count explicitly (a baseline step)
+                int? test = SelfTest.WorkersOverride;
+                int want = test ?? (JobWorkers != null ? JobWorkers.Value : 0);
                 int max = JobsUtility.JobWorkerMaximumCount;
                 if (want > 0)
                 {
@@ -909,17 +948,43 @@ namespace NukeStats
                         NukeStatsPlugin.Log?.LogInfo($"[perf] job workers {was} -> {n} (most the host allows: {max})");
                     }
                 }
-                else if (_appliedWorkers > 0)
+                else if (_appliedWorkers > 0 || test == 0)
                 {
                     // back to the game's own choice (GameManager.SetJobCount)
                     int n = max > 2 ? Mathf.Clamp((max + 1) / 2, 2, 8) : JobsUtility.JobWorkerCount;
                     int was = JobsUtility.JobWorkerCount;
-                    JobsUtility.JobWorkerCount = n;
-                    _appliedWorkers = 0;
-                    NukeStatsPlugin.Log?.LogInfo($"[perf] job workers {was} -> {n} (the game's own choice)");
+                    if (was != n)
+                    {
+                        JobsUtility.JobWorkerCount = n;
+                        NukeStatsPlugin.Log?.LogInfo($"[perf] job workers {was} -> {n} (the game's own choice)");
+                    }
+                    _appliedWorkers = test == 0 ? n : 0;   // the self-test's own: its end puts the operator's setting back
                 }
             }
             catch (Exception e) { NukeStatsPlugin.Log?.LogError("[perf] job workers: " + e.Message); }
+        }
+
+        // ---------------------------------------------------------------- for the self-test (SelfTest.cs)
+        internal static bool PhasesOn => _phasesOn;
+
+        // a new 15 s measurement from now: the one under way is dropped (a step's settings changed during it)
+        internal static void RestartWindow() { if (_on) ResetWindow(); }
+
+        // the self-test's workers and frame target in force now, not at the next once-a-second check
+        internal static void ApplyOverridesNow() { ApplyWorkers(); ApplyFps(); }
+
+        // A self-test is over and the server waits for players: the timing hooks and frame stages come out again now if
+        // the operator has them off (in a mission the once-a-second check does it).
+        internal static void SelfTestEnded()
+        {
+            try
+            {
+                if (GameManager.gameState != GameState.ServerWaiting) return;
+                bool timing = Timing != null && Timing.Value;
+                if (_phasesOn && !(timing && Phases != null && Phases.Value)) PhasesUninstall();
+                if (_on && !timing) Uninstall();
+            }
+            catch (Exception e) { NukeStatsPlugin.Log?.LogError("[perf] after the self-test: " + e.Message); }
         }
 
         static void ResetWindow()
@@ -943,8 +1008,7 @@ namespace NukeStats
             {
                 double sec = Math.Max(0.001, now - _windowStart);
                 double toMsPerSec = 1000.0 / Stopwatch.Frequency / sec;
-                int p95 = 0, seen = 0, need = (int)Math.Ceiling(_frames * 0.95);
-                for (int i = 0; i < _ftHist.Length; i++) { seen += _ftHist[i]; if (seen >= need) { p95 = i; break; } }
+                double p95 = FtPercentile(0.95), p99 = FtPercentile(0.99);
                 int ai = 0, players = 0, units = 0, aiTaxi = 0, aiAir = 0;
                 try
                 {
@@ -964,13 +1028,16 @@ namespace NukeStats
                     }
                 }
                 catch { }
+                int humans = NukeStatsPlugin.Humans().Count;
+                double physicsMs = double.NaN, spareMs = double.NaN, fixedMs = double.NaN;   // as the line prints them (the tester's reading)
                 var sb = new StringBuilder(1024);
                 sb.Append("{\"t\":\"perf\",\"sec\":").Append(F(sec))
                   .Append(",\"frames\":").Append(_frames)
                   .Append(",\"ft_ms\":").Append(F(_frames > 0 ? _ftSum / _frames : 0))
-                  .Append(",\"ft_p95\":").Append(p95)
+                  .Append(",\"ft_p95\":").Append(F(p95))
+                  .Append(",\"ft_p99\":").Append(F(p99))
                   .Append(",\"ft_max\":").Append(F(_ftMax))
-                  .Append(",\"humans\":").Append(NukeStatsPlugin.Humans().Count)
+                  .Append(",\"humans\":").Append(humans)
                   .Append(",\"player_aircraft\":").Append(players)
                   .Append(",\"ai_aircraft\":").Append(ai)
                   .Append(",\"ai_taxiing\":").Append(aiTaxi)
@@ -1021,6 +1088,7 @@ namespace NukeStats
                     {
                         if (k > 0) sb.Append(',');
                         sb.Append('"').Append(_stageNames[order[k]]).Append("\":").Append(F(_stageTicks[order[k]] * toMsPerSec));
+                        if (_stageNames[order[k]] == "FixedUpdate.PhysicsFixedUpdate") physicsMs = _stageTicks[order[k]] * toMsPerSec;
                     }
                     var phaseTot = new Dictionary<string, double>();
                     var phaseOrder = new List<string>();
@@ -1036,12 +1104,22 @@ namespace NukeStats
                         if (k > 0) sb.Append(',');
                         sb.Append('"').Append(phaseOrder[k]).Append("\":").Append(F(phaseTot[phaseOrder[k]]));
                     }
+                    if (phaseTot.TryGetValue("TimeUpdate", out double tu)) spareMs = tu;
+                    if (phaseTot.TryGetValue("FixedUpdate", out double fu)) fixedMs = fu;
                     sb.Append('}');
                 }
                 PerfExtra.Append(sb, sec);   // 1.9.2
                 PerfMission.Append(sb);      // 1.9.2: the minute's top objectives/outcomes
                 PerfHeld.Append(sb, _hitches, _hitchesGc, _hitchesUnlogged);
+                MemHygiene.Append(sb);       // 2026-10-15: what the mission-change clean-up released + the game's own floor
                 sb.Append('}');
+                // the self-test's measurement: what the Server Tester reads from this line (SelfTest.OnWindow)
+                if (SelfTest.Active)
+                {
+                    int jw = _labels.IndexOf("jobs_wait");
+                    SelfTest.OnWindow(sec, _frames, p95, p99, _ftMax, humans, ai, units, JobsUtility.JobWorkerCount, Application.targetFrameRate,
+                                      physicsMs, spareMs, fixedMs, jw >= 0 && jw < _ticks.Length ? _ticks[jw] * toMsPerSec : double.NaN);
+                }
                 ResetWindow();
                 NukeStatsPlugin.Out(sb.ToString());
             }

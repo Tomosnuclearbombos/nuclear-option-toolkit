@@ -52,7 +52,7 @@ namespace NukeStats
         // this pass-scoped guard prevents repeating those failed attempts.
         internal static void BeginPass(FactionHQ hq)
         {
-            if (!PatchActive || Enabled == null || !Enabled.Value || hq == null) return;
+            if (!PatchActive || Enabled == null || !Enabled.Value || SelfTest.StockStep || hq == null) return;
             try
             {
                 object currentRunner = MissionManager.Runner;
@@ -74,11 +74,23 @@ namespace NukeStats
             }
         }
 
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change with no mission running: the ended mission's
+        // runner (its objectives, outcomes and through them its units) and the per-FactionHQ states were kept until the next
+        // mission's first AI departure. The placeholder is never the same object as a runner, so BeginPass still sees the
+        // next mission as new and starts fresh states, exactly as it did with the old runner.
+        internal static int ReleaseOldMission()
+        {
+            if (!MemHygiene.OldRunner(missionRunner)) return 0;
+            missionRunner = MemHygiene.Released;
+            states = new ConditionalWeakTable<FactionHQ, FactionState>();
+            return 1;
+        }
+
         internal static Airbase.TrySpawnResult TrySpawn(Airbase originalAirbase, Player player,
             AircraftDefinition definition, LiveryKey livery, Loadout loadout, float fuelLevel, FactionHQ hq)
         {
             NukeStatsPlugin.Trace("AiAirportRotation.TrySpawn");
-            if (!PatchActive || Enabled == null || !Enabled.Value || player != null || hq == null ||
+            if (!PatchActive || Enabled == null || !Enabled.Value || SelfTest.StockStep || player != null || hq == null ||
                 !states.TryGetValue(hq, out FactionState state) || state.PlanningFailed)
                 return originalAirbase.TrySpawnAircraft(player, definition, livery, loadout, fuelLevel);
 

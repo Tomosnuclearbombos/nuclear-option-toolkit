@@ -664,6 +664,9 @@ NET_TS             = 0.0      # when NET was last updated (stale => omit from st
 LAST_FRAMETIME_MS  = None     # latest smoothed server frametime (ms) from the plugin's "net" line (webcc frametime box); None until seen
 PERF               = None     # 1.9.5: latest per-minute timing summary from the plugin's "perf" line (Perf.Timing on)
 PERF_TS            = 0.0      # when PERF was last updated
+SELFTEST           = None     # the plugin's server test: its latest "selftest" line (webcc Settings -> Server test)
+SELFTEST_TS        = 0.0      # when SELFTEST was last updated
+SELFTEST_FOLDER    = ""       # the results folder of the test it last saw running (the end line doesn't carry it)
 PLAYER_RTT_MS      = {}       # steamid -> int RTT ms (plugin: Steam m_nPing preferred, Notify ACK fallback)
 ENT                = None     # latest {"a":[AI aircraft],"s":[ships]} from the plugin's "ent" line (live map; ~5s)
 ENT_TS             = 0.0      # when ENT was last updated (stale => omit from state)
@@ -926,6 +929,7 @@ def _strip_color(s):
 CONSOLE_MIRROR_FILE  = os.path.join(_BASE_DIR, "console_mirror.log")
 DASHBOARD_STATE_FILE = os.path.join(_BASE_DIR, "dashboard_state.json")
 ADMIN_CMD_FILE       = os.path.join(_BASE_DIR, "admin_commands.jsonl")  # command-centre admin queue (e.g. grant points)
+SELFTEST_RESULTS_FILE = os.path.join(_BASE_DIR, "selftest_results.json")  # the last server test's results.json, for the webcc
 ADMIN_CMD_OFFSET_FILE = os.path.join(_BASE_DIR, "admin_commands.offset")  # persisted consume-offset: queue survives bot restarts
 ADMIN_CMD_MAX_AGE    = 900   # skip queued commands older than this (s) — replay-safety if the offset file is lost
 STATE_WRITE_INTERVAL = 0.5        # rewrite dashboard_state.json every 0.5s; plugin PosTick is 0.5 Hz
@@ -1223,6 +1227,7 @@ def write_dashboard_state(*, state, server_up, online, votes, vote_ends_at,
             "players":      players,
             "faction_colours": dict(FACTION_COLOURS),   # vanilla faction.color hexes (plugin-sampled) for WebCC --bdf/--pala
             "air":          AIR if (AIR and now - AIR_TS < 15) else None,   # AI/player aircraft counts (perf panel)
+            "selftest":     dict(SELFTEST, age=round(now - SELFTEST_TS)) if SELFTEST else None,   # the plugin's server test
             "net":          ({**NET, "ts": round(NET_TS, 2)} if (NET and now - NET_TS < 15) else None),   # connection-health telemetry + reading timestamp (so the webcc NET graph samples once per reading, not per poll)
             "frametime_ms": LAST_FRAMETIME_MS,               # smoothed server frametime (ms) from the plugin's "net" line (webcc frametime box); None until seen
             "entities":     ENT if (ENT and now - ENT_TS < 15) else None,   # AI aircraft + ships for the live map
@@ -3462,6 +3467,44 @@ def set_report_banned(sid, banned):
 
 
 _banned_cache = {"ts": 0.0, "players": []}
+
+
+_SELFTEST_FOLDER_RE = re.compile(r"^[0-9A-Za-z_\-]{1,40}$")
+
+
+def selftest_fetch_results(folder):
+    """The plugin's server test ended: copy its results.json (NukeStats-ServerTests/<folder>/) next to the bot for the
+    webcc's Server test card. Read-only over SFTP; once per folder; best-effort."""
+    if not _SELFTEST_FOLDER_RE.match(folder or ""):
+        return
+    try:
+        with open(SELFTEST_RESULTS_FILE, encoding="utf-8") as f:
+            if json.load(f).get("folder") == folder:
+                return
+    except (OSError, ValueError):
+        pass
+    got = {}
+
+    def _op(sftp):
+        with sftp.open("NukeStats-ServerTests/" + folder + "/results.json", "rb") as f:
+            got["results"] = json.loads(f.read(2_000_000).decode("utf-8", "replace"))
+
+    for _ in range(3):                         # the plugin writes results.json as the test ends: give it a moment
+        time.sleep(5)
+        try:
+            _sftp_op(_op)
+            break
+        except Exception:                      # noqa: BLE001
+            got.clear()
+    if not isinstance(got.get("results"), dict):
+        return
+    tmp = SELFTEST_RESULTS_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"folder": folder, "fetched": time.time(), "results": got["results"]}, f)
+        os.replace(tmp, SELFTEST_RESULTS_FILE)
+    except OSError as e:
+        print(f"[selftest] couldn't keep the results: {e}")
 
 
 def refresh_banned_players():
@@ -6537,6 +6580,16 @@ def handle_stats_line(rc, obj):
         # 1.9.8 (owner 2026-10-13): every long frame the plugin describes is kept in hitch_log.jsonl, with the mission
         hitch_log_write(dict({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "mission": CURRENT_MISSION}, **obj))
         return
+    if t == "selftest":
+        # the plugin's server test: its progress for the webcc's Server test card, and its results once it ends
+        global SELFTEST, SELFTEST_TS, SELFTEST_FOLDER
+        SELFTEST = {k: v for k, v in obj.items() if k != "t"}
+        SELFTEST_TS = time.time()
+        if obj.get("folder"):
+            SELFTEST_FOLDER = str(obj["folder"])
+        if obj.get("state") in ("done", "stopped", "aborted") and SELFTEST_FOLDER:
+            threading.Thread(target=selftest_fetch_results, args=(SELFTEST_FOLDER,), daemon=True).start()
+        return
     if t == "perf":
         # 1.9.5: the plugin's per-minute timing summary -> the per-minute performance log
         global PERF, PERF_TS
@@ -7642,6 +7695,12 @@ def _apply_one_admin_command(rc, cmd, now_q):
             print(f"[admin] setcfg error: {e}")
             _write_admin_result("setcfg", False, key=str(cmd.get("key", "")),
                                 value=str(cmd.get("value", "")), error=str(e))
+    elif cmd.get("action") == "selftest":     # webcc Server test card: start or stop the plugin's server test
+        try:
+            if cmd.get("op") in ("start", "stop", "status"):
+                _drop_plugin_cmd("selftest|" + cmd["op"])
+        except Exception as e:                # noqa: BLE001
+            print(f"[admin] selftest error: {e}")
     elif cmd.get("action") == "dumpcfg":      # webcc settings menu: ask the plugin to re-emit its live config
         try:
             _drop_plugin_cmd("dumpcfg")

@@ -143,7 +143,7 @@ namespace NukeStats
             }
         }
 
-        static bool On => Enabled != null && Enabled.Value;
+        static bool On => Enabled != null && Enabled.Value && !SelfTest.StockStep;   // off for a self-test's stock step
 
         static bool HasTakeoffPriority(AIPilotTaxiState s, Aircraft aircraft)
         {

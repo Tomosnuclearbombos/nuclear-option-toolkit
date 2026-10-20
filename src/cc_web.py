@@ -2772,6 +2772,94 @@ def api_settings_set():
                     "needs_restart": meta.get("live") == "restart"})
 
 
+# ── NukeStats Server Tester results (Settings -> "Apply Server Tester results") ─────────────────────
+# The tester (a separate download) writes results.json with the plugin settings it suggests. The panel reads the
+# file in the browser and posts it here: without "apply" this only checks it and returns what would change; with
+# "apply": true each setting goes through the same setcfg path as a change made by hand. Only these keys are taken
+# from the file, and each is checked against the catalogue's range; the core suggestion is shown, never applied,
+# given pinning a server to CPUs is done on the machine that runs it.
+_TESTER_KEYS = ("Perf.JobWorkers", "Perf.TargetFps")
+_CPU_LIST_RE = re.compile(r"^[0-9,\-]{1,200}$")
+_HEX_RE = re.compile(r"^[0-9A-Fa-f]{1,16}$")
+
+
+@app.route("/api/tester-results", methods=["POST"])
+def api_tester_results():
+    b = request.get_json(force=True, silent=True) or {}
+    res = b.get("results")
+    if not isinstance(res, dict) or res.get("tool") != "NukeStats Server Tester":
+        return jsonify({"ok": False, "error": "that file isn't a Nuclear Option Server Tester results.json"})
+    cat = {r.get("key"): r for r in _load_catalogue()}
+    settings = res.get("settings") if isinstance(res.get("settings"), dict) else {}
+    rows = []
+    for key in _TESTER_KEYS:
+        if key not in settings or key not in cat:
+            continue
+        meta = cat[key]
+        try:
+            num = int(float(settings[key]))
+        except (TypeError, ValueError):
+            continue
+        try:
+            if meta.get("min") not in (None, ""):
+                num = max(num, int(float(meta["min"])))
+            if meta.get("max") not in (None, ""):
+                num = min(num, int(float(meta["max"])))
+        except (TypeError, ValueError):
+            pass
+        rows.append({"key": key, "friendlyName": meta.get("friendlyName", key), "value": str(num)})
+    rec = res.get("recommend") if isinstance(res.get("recommend"), dict) else {}
+    cpu = res.get("cpu") if isinstance(res.get("cpu"), dict) else {}
+    cpus = str(rec.get("cpus", "") or "")
+    hexmask = str(rec.get("affinityHex", "") or "")
+    # a Windows mask only from a test that ran on Windows (Linux numbers a core's two threads differently)
+    if not str((res.get("test") if isinstance(res.get("test"), dict) else {}).get("os", "")).startswith("Microsoft Windows"):
+        hexmask = ""
+    try:
+        cores = int(rec.get("cores", -1))
+    except (TypeError, ValueError):
+        cores = -1
+    findings = res.get("findings") if isinstance(res.get("findings"), list) else []
+    out = {
+        "ok": True, "rows": rows, "date": str(res.get("date", ""))[:40],
+        "cpu": str(cpu.get("model", ""))[:120], "cores": cores,
+        "cpus": cpus if _CPU_LIST_RE.match(cpus) else "", "affinityHex": hexmask if _HEX_RE.match(hexmask) else "",
+        "fastOnly": bool(rec.get("fastCoresOnly")),
+        "findings": [str(f)[:300] for f in findings[:10]],
+        "stopped": str(res.get("stoppedBecause") or "")[:200],
+    }
+    if b.get("apply"):
+        for r in rows:
+            _queue_admin({"action": "setcfg", "key": r["key"], "value": r["value"], "owner": "plugin"})
+            _pending_set(r["key"], r["value"])
+        out["applied"] = [r["key"] for r in rows]
+    return jsonify(out)
+
+
+# ── NukeStats server test (Settings -> "Server test") ─────────────────────────────────────────────────────────────────
+# The plugin runs the Server Tester's automated test on the server itself while nobody is on. Start and stop go to the
+# bot as a "selftest" action, which drops the plugin command; progress comes back in /api/state ("selftest"), and the
+# last test's results.json, once the bot has copied it over, from here (the panel shows it as Apply Server Tester results).
+@app.route("/api/selftest", methods=["POST"])
+def api_selftest():
+    b = request.get_json(force=True, silent=True) or {}
+    op = b.get("op")
+    if op not in ("start", "stop"):
+        return jsonify({"ok": False, "error": "start or stop"})
+    _queue_admin({"action": "selftest", "op": op})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/selftest-results")
+def api_selftest_results():
+    try:
+        with open(bot.SELFTEST_RESULTS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return jsonify({"ok": False})
+    return jsonify({"ok": True, "folder": d.get("folder", ""), "results": d.get("results")})
+
+
 @app.route("/api/console-filter", methods=["GET", "POST"])
 def api_console_filter():
     """The webcc's 'filter messages like this' list. POST {action:add, pattern:<a console line>}

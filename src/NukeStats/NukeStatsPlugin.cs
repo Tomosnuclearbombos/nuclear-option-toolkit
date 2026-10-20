@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.3";
+        public const string Version = "1.9.12";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -210,9 +210,14 @@ namespace NukeStats
             _cfgFile = Config;   // cache the ConfigFile NOW — it survives the GameObject being destroyed, whereas Instance.Config later reads as Unity-null
             AiAirportRotation.Initialize(Config);
             AirbaseTaxi.Initialize(Config);     // 1.9.6 test 4: AI taxi/takeoff fixes (parts of Appulcake's AI Plane Unstuck)
+            MissileBurnoutFix.Initialize(Config);   // 2026-10-15: the game's NL-98 burnout bug (missile never explodes)
+            NukeBlastFix.Initialize(Config);   // 1.9.12: the game's 4096-object blast list (big nukes left random units undamaged)
+            try { MemHygiene.Initialize(Config); } catch (Exception e) { Log?.LogError("[mem] init: " + e); }   // 2026-10-15: let go of what ended missions leave behind (MemHygiene.cs); guarded so it can never stop the rest of Awake
             PingKick.Initialize(Config);        // 1.9.1: high-ping kicker
+            try { ResolveSteamPingAtStart(); } catch (Exception e) { Log?.LogError("[rtt] start lookup: " + e.Message); }   // 2026-10-15: not at the first join
             TkWatch.Initialize(Config);         // 1.9.4: teamkill watch list
             Perf.Initialize(Config);            // 1.9.5: frame timing + job worker count
+            SelfTest.Initialize(Config);        // 2026-10-18: the Server Tester's automated test, run on this server (SelfTest.cs)
             OpenStaleNetGrace(60f);   // never strike stale netIds during boot/first scene load (AdvanceGame re-opens it per mission)
             try { DontDestroyOnLoad(gameObject); } catch { }   // try to survive scene loads on the dedicated server
             WinPoints       = Config.Bind("Scoring", "WinPoints", 200, "Points to each player on the winning side.");
@@ -805,6 +810,8 @@ namespace NukeStats
                 Perf.Lap(2);
                 PvETimeoutTick();                     // PvE: force human defeat when the mission timer expires
                 Perf.Lap(3);
+                SelfTest.Tick();                      // 2026-10-18: the server test (idle: one check); a player joining stops it this frame
+                Perf.Lap(4);
                 AnnihilateTick();                     // no planes AND no hangars -> ForceVictory (grace)
                 Perf.Lap(5);
                 PingKick.Tick();                      // 1.9.1: high-ping kicker (1 Hz; on above the player threshold only)
@@ -1492,6 +1499,14 @@ namespace NukeStats
         static FieldInfo _rttSteamPingField;
         static MethodInfo _rttSteamGsGetStatus;
         static MethodInfo _rttSteamGetStatus;
+        static int _rttSteamGsParams, _rttSteamClParams;        // parameter counts, read once at the lookup
+        static object[] _rttWorkerArgsGs, _rttWorkerArgsCl;    // the ping thread's own argument arrays (reused)
+        static object[] _rttFrameArgsGs, _rttFrameArgsCl;      // the in-frame fallback's (main thread only)
+        static readonly object RttBoxedZero = 0;
+        // 2026-10-15: a player's Steam connection id, read once per connection (it is fixed for the connection) instead of
+        // by reflection on every check. Key = SteamID; value = (the connection handle it was read from, the boxed id).
+        static readonly Dictionary<string, KeyValuePair<object, object>> _rttConnIds = new Dictionary<string, KeyValuePair<object, object>>();
+        static bool _rttDirectHandleFailed;
 
         // Lightweight callback; one allocation per in-flight Notify probe (interval is seconds, not per-frame).
         sealed class RttNotifyCallback : INotifyCallBack
@@ -1543,16 +1558,46 @@ namespace NukeStats
             catch { }
         }
 
+        // 2026-10-15 (owner: "can you make it more efficient then?"): the Steam types used to be looked up the first time
+        // a player's ping was checked, on the main thread, during the first player's join. AccessTools.TypeByName on a
+        // name without its assembly falls back to listing every type of every loaded assembly, four times: 159-196 ms
+        // frames (RttProbe 107-122 ms) six times on 13-14 Oct. Now they are looked up once at plugin start (nobody is
+        // on yet) by assembly-qualified name, which is a direct lookup; the old search is only the last resort.
+        internal static void ResolveSteamPingAtStart()
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            EnsureSteamRttResolved();
+            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            Log?.LogInfo("[rtt] Steam ping types resolved at start in " + ms.ToString("0.0", CultureInfo.InvariantCulture) + " ms ("
+                + (_rttSteamUnavailable ? "unavailable: Notify probe only" : "ready") + ")");
+        }
+
+        // Type by full name: the named assembly first (a direct lookup), then each loaded assembly's own GetType, and only
+        // then Harmony's search through every type.
+        static Type FastType(string fullName, string assembly)
+        {
+            Type t = null;
+            try { t = Type.GetType(fullName + ", " + assembly, false); } catch { }
+            if (t != null) return t;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType(fullName, false); } catch { t = null; }
+                if (t != null) return t;
+            }
+            Log?.LogWarning("[rtt] " + fullName + " not found in " + assembly + " - searching every type");
+            return AccessTools.TypeByName(fullName);
+        }
+
         static void EnsureSteamRttResolved()
         {
             if (_rttSteamResolveDone) return;
             _rttSteamResolveDone = true;
             try
             {
-                _rttSteamConnT = AccessTools.TypeByName("Mirage.SteamworksSocket.SteamConnection");
-                _rttSteamStatusT = AccessTools.TypeByName("Steamworks.SteamNetConnectionRealTimeStatus_t");
-                var gsT = AccessTools.TypeByName("Steamworks.SteamGameServerNetworkingSockets");
-                var clT = AccessTools.TypeByName("Steamworks.SteamNetworkingSockets");
+                _rttSteamConnT = FastType("Mirage.SteamworksSocket.SteamConnection", "Mirage.SteamworksSocket");
+                _rttSteamStatusT = FastType("Steamworks.SteamNetConnectionRealTimeStatus_t", "com.rlabrecque.steamworks.net");
+                var gsT = FastType("Steamworks.SteamGameServerNetworkingSockets", "com.rlabrecque.steamworks.net");
+                var clT = FastType("Steamworks.SteamNetworkingSockets", "com.rlabrecque.steamworks.net");
                 if (_rttSteamConnT == null || _rttSteamStatusT == null || (gsT == null && clT == null))
                 {
                     _rttSteamUnavailable = true;
@@ -1563,6 +1608,8 @@ namespace NukeStats
                 _rttSteamPingField = AccessTools.Field(_rttSteamStatusT, "m_nPing");
                 if (gsT != null) _rttSteamGsGetStatus = FindSteamGetConnectionRealTimeStatus(gsT);
                 if (clT != null) _rttSteamGetStatus = FindSteamGetConnectionRealTimeStatus(clT);
+                _rttSteamGsParams = _rttSteamGsGetStatus != null ? _rttSteamGsGetStatus.GetParameters().Length : 0;   // once, not per read
+                _rttSteamClParams = _rttSteamGetStatus != null ? _rttSteamGetStatus.GetParameters().Length : 0;
                 if (_rttSteamConnIdField == null || _rttSteamPingField == null
                     || (_rttSteamGsGetStatus == null && _rttSteamGetStatus == null))
                 {
@@ -1620,16 +1667,11 @@ namespace NukeStats
             if (_rttSteamUnavailable) return false;
             try
             {
-                if (!(p?.Owner is NetworkPlayer np)) return false;
-                object handle = ReflectGet(np, "ConnectionHandle");
-                if (handle == null || _rttSteamConnT == null || !_rttSteamConnT.IsInstanceOfType(handle))
-                    return false;
-                object connId = _rttSteamConnIdField.GetValue(handle);
-                if (connId == null) return false;
+                if (!TryGetSteamConnId(p, Sid(p), out object connId)) return false;
 
                 // Dedicated servers use SteamGameServerNetworkingSockets; fall back to client API.
-                if (InvokeSteamRealTimeStatus(_rttSteamGsGetStatus, connId, out int ping)
-                    || InvokeSteamRealTimeStatus(_rttSteamGetStatus, connId, out ping))
+                if (InvokeSteamRealTimeStatus(_rttSteamGsGetStatus, _rttSteamGsParams, connId, ref _rttFrameArgsGs, out int ping)
+                    || InvokeSteamRealTimeStatus(_rttSteamGetStatus, _rttSteamClParams, connId, ref _rttFrameArgsCl, out ping))
                 {
                     if (ping < 1 || ping > 30000) return false;
                     ms = ping;
@@ -1640,20 +1682,19 @@ namespace NukeStats
             return false;
         }
 
-        static bool InvokeSteamRealTimeStatus(MethodInfo method, object connId, out int ping)
+        // args: the caller's own reusable array (one per thread and method), made on first use
+        static bool InvokeSteamRealTimeStatus(MethodInfo method, int nParams, object connId, ref object[] args, out int ping)
         {
             ping = 0;
-            if (method == null || _rttSteamStatusT == null || _rttSteamPingField == null) return false;
+            if (method == null || nParams < 2 || _rttSteamStatusT == null || _rttSteamPingField == null) return false;
             try
             {
-                var ps = method.GetParameters();
-                if (ps.Length < 2) return false;
-                object status = Activator.CreateInstance(_rttSteamStatusT);
-                var args = new object[ps.Length];
+                if (args == null || args.Length != nParams) args = new object[nParams];
+                object status = Activator.CreateInstance(_rttSteamStatusT);   // a fresh status each read
                 args[0] = connId;
                 args[1] = status;
-                if (ps.Length > 2) args[2] = 0;          // nLanes
-                if (ps.Length > 3) args[3] = null;       // pLanes
+                if (nParams > 2) args[2] = RttBoxedZero;   // nLanes
+                if (nParams > 3) args[3] = null;           // pLanes
                 object result = method.Invoke(null, args);
                 if (!SteamResultOk(result)) return false;
                 status = args[1] ?? status;
@@ -1718,8 +1759,8 @@ namespace NukeStats
                         int ping = 0;
                         try
                         {
-                            if (!InvokeSteamRealTimeStatus(_rttSteamGsGetStatus, job.Value, out ping)
-                                && !InvokeSteamRealTimeStatus(_rttSteamGetStatus, job.Value, out ping))
+                            if (!InvokeSteamRealTimeStatus(_rttSteamGsGetStatus, _rttSteamGsParams, job.Value, ref _rttWorkerArgsGs, out ping)
+                                && !InvokeSteamRealTimeStatus(_rttSteamGetStatus, _rttSteamClParams, job.Value, ref _rttWorkerArgsCl, out ping))
                                 ping = 0;
                         }
                         catch { ping = 0; }
@@ -1730,8 +1771,9 @@ namespace NukeStats
             }
         }
 
-        // Main thread: the player's Steam connection id for the ping thread (no Steam call here).
-        static bool TryGetSteamConnId(Player p, out object connId)
+        // Main thread: the player's Steam connection id for the ping thread (no Steam call here). Read from the connection
+        // once and kept while the player keeps that connection.
+        static bool TryGetSteamConnId(Player p, string sid, out object connId)
         {
             connId = null;
             EnsureSteamRttResolved();
@@ -1739,22 +1781,60 @@ namespace NukeStats
             try
             {
                 if (!(p?.Owner is NetworkPlayer np)) return false;
-                object handle = ReflectGet(np, "ConnectionHandle");
+                object handle = ConnectionHandleOf(np);
                 if (handle == null || _rttSteamConnT == null || !_rttSteamConnT.IsInstanceOfType(handle)) return false;
+                if (!string.IsNullOrEmpty(sid) && _rttConnIds.TryGetValue(sid, out var known) && ReferenceEquals(known.Key, handle))
+                {
+                    connId = known.Value;
+                    return connId != null;
+                }
                 connId = _rttSteamConnIdField.GetValue(handle);
+                if (!string.IsNullOrEmpty(sid)) _rttConnIds[sid] = new KeyValuePair<object, object>(handle, connId);
                 return connId != null;
             }
             catch { return false; }
         }
 
+        // Mirage's NetworkPlayer.ConnectionHandle / .Connection are public: read directly (no reflection). If this game
+        // build ever lacks them, the call below fails once and the cached reflective read is used from then on.
+        static object ConnectionHandleOf(NetworkPlayer np)
+        {
+            if (!_rttDirectHandleFailed)
+            {
+                try { return DirectHandle(np); }
+                catch (MissingMemberException) { _rttDirectHandleFailed = true; }
+                catch (TypeLoadException) { _rttDirectHandleFailed = true; }
+            }
+            return ReflectGet(np, "ConnectionHandle");
+        }
+
+        static object ConnectionOf(NetworkPlayer np)
+        {
+            if (!_rttDirectHandleFailed)
+            {
+                try { return DirectConnection(np); }
+                catch (MissingMemberException) { _rttDirectHandleFailed = true; }
+                catch (TypeLoadException) { _rttDirectHandleFailed = true; }
+            }
+            return ReflectGet(np, "Connection");
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static object DirectHandle(NetworkPlayer np) => np.ConnectionHandle;
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static object DirectConnection(NetworkPlayer np) => np.Connection;
+
+        static readonly List<KeyValuePair<string, int>> _rttGot = new List<KeyValuePair<string, int>>();   // main thread only
+
         static void DrainRttAnswers(float now)
         {
-            List<KeyValuePair<string, int>> got = null;
+            List<KeyValuePair<string, int>> got = _rttGot;
+            got.Clear();
             lock (_rttLock)
             {
                 if (_rttAnswers.Count == 0) return;
-                got = new List<KeyValuePair<string, int>>(_rttAnswers);
-                _rttAnswers.Clear();
+                while (_rttAnswers.Count > 0) got.Add(_rttAnswers.Dequeue());
             }
             _rttThreadLastAnswer = now;
             foreach (var a in got)
@@ -1798,7 +1878,7 @@ namespace NukeStats
                     if (threaded && !_rttSteamMiss.Contains(id))
                     {
                         if (_rttAsked.Contains(id)) continue;   // its last read has not come back yet
-                        if (TryGetSteamConnId(p, out object connId))
+                        if (TryGetSteamConnId(p, id, out object connId))
                         {
                             if (_rttAsked.Count == 0) _rttFirstAskAt = now;
                             lock (_rttLock) _rttAsk.Enqueue(new KeyValuePair<string, object>(id, connId));
@@ -1836,7 +1916,7 @@ namespace NukeStats
                     DisableRttNotify("Owner is not NetworkPlayer (" + (p.Owner.GetType()?.FullName ?? "?") + ")");
                     return false;
                 }
-                object connObj = ReflectGet(np, "Connection");
+                object connObj = ConnectionOf(np);
                 if (!(connObj is IConnection conn))
                     return true;   // soft skip — connection not ready
                 _rttInFlight.Add(sid);
@@ -1878,6 +1958,8 @@ namespace NukeStats
                     if (!present.Contains(k)) _rttInFlight.Remove(k);
                 _rttAsked.RemoveWhere(k => !present.Contains(k));       // 1.9.6 test 3: the ping thread's bookkeeping
                 _rttSteamMiss.RemoveWhere(k => !present.Contains(k));
+                foreach (var k in new List<string>(_rttConnIds.Keys))     // 2026-10-15: connection ids read once per player
+                    if (!present.Contains(k)) _rttConnIds.Remove(k);
             }
             catch { }
         }
@@ -2099,7 +2181,25 @@ namespace NukeStats
         void Update() { PeriodicTick(); }   // a no-op if this object never ticks
 
         // -------- player enumeration (humans only; SteamID filters out AI/unjoined) --------
-        internal static string Sid(Player p) { try { return p.SteamID.ToString(); } catch { return ""; } }
+        // 2026-10-15: the SteamID's text is made once per SteamID and kept, instead of a new string on every call (the ping
+        // probe alone asked for every player's on every frame, and Humans() does too). Same text as before.
+        static readonly Dictionary<ulong, string> _sidText = new Dictionary<ulong, string>();
+        internal static string Sid(Player p)
+        {
+            try
+            {
+                ulong v = p.SteamID;
+                lock (_sidText)
+                {
+                    if (_sidText.TryGetValue(v, out string s)) return s;
+                    s = v.ToString();
+                    if (_sidText.Count >= 4096) _sidText.Clear();   // a day's players are a few hundred; never grows unbounded
+                    _sidText[v] = s;
+                    return s;
+                }
+            }
+            catch { return ""; }
+        }
         // internal shims for the patch classes (Sid/Humans are private by design)
 
         // PERF: FindObjectsOfType<Player> is expensive and Humans() is called many times
@@ -3483,13 +3583,47 @@ namespace NukeStats
             catch (Exception e) { Log?.LogError("MaybeCleanupPilots: " + e); }
         }
 
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change: dead pilots of the ended mission now (the 30 s
+        // sweep above forgets them too, a little later), and the frame caches of player objects (rebuilt on the next call).
+        internal static int ReleaseOldMissionRefs()
+        {
+            int n = 0;
+            if (PilotSeen.Count > 0)
+            {
+                var gone = new List<PilotDismounted>();
+                foreach (var key in PilotSeen.Keys) if (key == null) gone.Add(key);
+                foreach (var key in gone) PilotSeen.Remove(key);
+                n += gone.Count;
+            }
+            if (_humansCache != null) { n += _humansCache.Count; _humansCache = null; _humansCacheTime = -1f; }
+            if (_humansScan != null) { n += _humansScan.Count; _humansScan = null; _humansScanAt = -999f; }
+            return n;
+        }
+
         // -------- end of game: authoritative winner + awards --------
         internal void OnDeclareEndGame(FactionHQ hq, string endType)
         {
             try
             {
                 if (Time.time - _lastEnd < 20f) return;                 // debounce paired/dup calls
-                if (!string.Equals(endType, "Victory", StringComparison.OrdinalIgnoreCase)) return;
+                // 10-14 (owner): a mission can end with a DEFEAT outcome (Carrier Fleet Breakthrough "Annex Airwing
+                // Lost" = PALA Defeat). The game shows that as a win for the other side, so it is one here too: the
+                // one other HQ is the winner. Before this a Defeat ending recorded no result (no W/L, no top 3).
+                if (string.Equals(endType, "Defeat", StringComparison.OrdinalIgnoreCase))
+                {
+                    string loser = hq != null && hq.faction != null ? hq.faction.factionName : "?";
+                    var others = new HashSet<FactionHQ>();
+                    foreach (var h in AllHQs())
+                        if (h != null && h != hq && h.faction != null) others.Add(h);
+                    if (others.Count != 1)
+                    {
+                        Log?.LogInfo("[endgame] Defeat for " + loser + " but " + others.Count + " other side(s), so no result recorded");
+                        return;
+                    }
+                    foreach (var h in others) hq = h;
+                    Log?.LogInfo("[endgame] Defeat for " + loser + " = Victory for " + hq.faction.factionName);
+                }
+                else if (!string.Equals(endType, "Victory", StringComparison.OrdinalIgnoreCase)) return;
                 _lastEnd = Time.time;
                 ResetReconMeters();   // a breaker trip never outlives its match
                 // NOTE: do NOT advance the balance game-counter here - that happens once per mission START
@@ -4687,6 +4821,7 @@ namespace NukeStats
                 try
                 {
                     System.Threading.Thread.Sleep(1000);
+                    SelfTest.PollerTick();             // 2026-10-18: the server test's start, its main-thread driver, CPU samples and deadman
                     string root = Paths.GameRootPath;
                     if (string.IsNullOrEmpty(root)) continue;
                     string[] files;
@@ -4703,7 +4838,8 @@ namespace NukeStats
                         // it only reads the Encyclopedia and writes a log line. Left to the main thread it
                         // would sit unconsumed on an idle server (the main driver needs someone online),
                         // which is exactly what happened the first time it was asked for.
-                        if (verb != "setcfg" && verb != "dumpcfg" && verb != "aircraftlist")
+                        // selftest (2026-10-18) only sets flags here; the test runs on the main thread.
+                        if (verb != "setcfg" && verb != "dumpcfg" && verb != "aircraftlist" && verb != "selftest")
                             continue;                                         // not ours: leave for the main thread
                         bool ok = false;
                         try { ok = ApplyConfigCommand(body); }
@@ -4738,6 +4874,7 @@ namespace NukeStats
             // poller's entire reason to exist, and DumpCfg is the same code path SetCfg already runs
             // safely on this thread.
             if (verb == "dumpcfg") { try { DumpCfg(); } catch (Exception e) { Log?.LogError("dumpcfg: " + e); } return true; }
+            if (verb == "selftest") { try { SelfTest.Command(body); } catch (Exception e) { Log?.LogError("selftest: " + e); } return true; }
             if (verb != "setcfg" || parts.Length < 3) return false;
             string key = parts[1].Trim(), val = parts[2].Trim();
             string result = SetCfg(key, val);          // returns "" / "ok"-ish on success, a reason on failure
@@ -4861,6 +4998,7 @@ namespace NukeStats
                 // sends (aircraftlist|| - no sid), while the main-thread poll consumed and deleted the
                 // command file, so the panel button did nothing at all.
                 if (verb == "aircraftlist") { LogAircraftCatalog("admin request"); return; }
+                if (verb == "selftest") { SelfTest.Command(line); return; }   // 2026-10-18: selftest|start[|args] / stop / status
                 if (verb == "ban" || verb == "unban")                          // webcc Reports tab: ban/unban a SteamID (immediate)
                 {
                     string bsid = parts.Length > 1 ? parts[1].Trim() : "";
@@ -5582,6 +5720,7 @@ namespace NukeStats
         {
             try
             {
+                if (SelfTest.Active) return;                         // 2026-10-18: nothing ends the server test's mission
                 float now = Time.time;
                 if (now - _lastTimeoutCheck < 1f) return;            // 1 Hz, cheap
                 _lastTimeoutCheck = now;
@@ -6148,6 +6287,7 @@ namespace NukeStats
         {
             try
             {
+                if (SelfTest.Active) return;                          // 2026-10-18: nothing ends the server test's mission
                 float now = Time.time;
                 if (now - _lastAnnihilateCheck < 1f) return;          // 1 Hz
                 _lastAnnihilateCheck = now;
@@ -6440,6 +6580,7 @@ namespace NukeStats
             {
                 if (EnforceBalance == null || !EnforceBalance.Value) return;
                 if (AutoMove == null || !AutoMove.Value) return;
+                if (SelfTest.Active) return;                         // 2026-10-18: nobody on during the server test
                 float now = Time.time;
                 if (now < _nextBalance) return;
                 _nextBalance = now + Mathf.Max(2, RecheckSeconds != null ? RecheckSeconds.Value : 6);
@@ -7822,15 +7963,33 @@ namespace NukeStats
     // Authoritative winner: the winning faction's HQ declares the end. Read the result
     // by name ("Victory"/"Defeat") so we don't need the internal EndType enum.
     // Authoritative winner: the winning faction's HQ declares the end.
+    // 10-13: ONLY THE CALL THAT ENDS THE GAME IS THE RESULT. A mission's objectives keep running through the game's 95 s
+    // wait after the end, so a second EndGame outcome can still fire: Carrier Fleet Breakthrough on 10-13, PALA won at
+    // 22:01:51, then BDF's "Sink Enemy Carriers" finished when the carrier sank and declared its own Victory at 22:02:20.
+    // The game ignores a call like that (its RPC handler acts only while the resolution is Ongoing, and the first call
+    // sets it straight away). The old 20 s debounce had run out, so we paid a second
+    // result: a Boscali win frame, the top 3 again, and the bot booked a loss for every PALA pilot. Same test as the game.
     [HarmonyPatch(typeof(FactionHQ), "DeclareEndGame")]
     internal static class DeclareEndGamePatch
     {
         static bool _fired;
-        static void Postfix(FactionHQ __instance, object[] __args)
+        static void Prefix(out bool __state)
+        {
+            __state = true;                                           // unreadable -> behave as before
+            try { __state = GameManager.gameResolution == GameResolution.Ongoing; } catch { }
+        }
+        static void Postfix(FactionHQ __instance, object[] __args, bool __state)
         {
             NukeStatsPlugin.Trace("DeclareEndGamePatch");
             string end = (__args != null && __args.Length > 0 && __args[0] != null) ? __args[0].ToString() : "";
             if (!_fired) { _fired = true; NukeStatsPlugin.Log?.LogInfo("[diag] DeclareEndGame fired: " + end); }
+            if (!__state)
+            {
+                string who = __instance != null && __instance.faction != null ? __instance.faction.factionName : "?";
+                NukeStatsPlugin.Log?.LogInfo("[endgame] ignored a later " + end + " from " + who
+                                             + ": the game had already ended, so the first result stands");
+                return;
+            }
             NukeStatsPlugin.Instance?.OnDeclareEndGame(__instance, end);
         }
     }
@@ -8319,6 +8478,17 @@ namespace NukeStats
     {
         static bool _fired;
         static object _lastMission;
+
+        // MemHygiene.ClearPluginMissionRefs (2026-10-15), at a mission change: the ended Mission (every saved unit and its
+        // spawned unit) was kept here until the next mission's first player start. The placeholder is never the same object
+        // as a mission, so the next start is a new game here exactly as it was with the old object.
+        internal static int ReleaseOldMission()
+        {
+            if (!MemHygiene.OldMission(_lastMission)) return 0;
+            _lastMission = MemHygiene.Released;
+            return 1;
+        }
+
         static void Postfix(Mission __0, Player __1)
         {
             NukeStatsPlugin.Trace("RankFloorPatch");
