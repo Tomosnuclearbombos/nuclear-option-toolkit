@@ -550,7 +550,7 @@ namespace ServerTester.Engine
             var sb = new StringBuilder();
             var cpu = TestPlan.Cpu(run.Options);
             int fast = TestPlan.FastCountOf(run.Options);
-            sb.AppendLine("Nuclear Option Server Tester " + ToolVersion + ", " + run.Started.ToString("d MMM yyyy HH:mm", Inv) + (run.Started.Kind == DateTimeKind.Utc ? " UTC" : ""));
+            sb.AppendLine("NukeStats Server Tester " + ToolVersion + ", " + run.Started.ToString("d MMM yyyy HH:mm", Inv) + (run.Started.Kind == DateTimeKind.Utc ? " UTC" : ""));
             sb.AppendLine("CPU: " + cpu.Model + ", " + cpu.Cores.Count + " cores / " + cpu.Threads + " threads"
                           + (cpu.Hybrid ? " (" + fast + " fast, " + (cpu.Cores.Count - fast) + " efficient)" : ""));
             sb.AppendLine("Load: " + run.Options.Mission + " (" + (run.Options.Mission == TestPlan.RealisticBenchmark
