@@ -2,6 +2,11 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [1.9.13] 2026-10-23
+
+* **No teamkill warnings after a match.** Once a match has ended, friendly fire while the vote for the next map is up is no longer judged, warned, punished or logged.
+* **Remote commands fix.** The game answers one command per connection and then hangs up. The bot now closes the connection after each reply, so it no longer fails a send and reconnects every time.
+
 ## [1.9.12] 2026-10-20
 
 * **Server test.** The plugin can now test your server and find the best settings for it. Start it from the Server test card in the dashboard's Settings. It waits until the server is empty and puts it back as it was.

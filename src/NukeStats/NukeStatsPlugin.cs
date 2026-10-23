@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.12";
+        public const string Version = "1.9.13";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -3999,6 +3999,18 @@ namespace NukeStats
             try { File.WriteAllText(BanFilePath, string.Join("\n", _tkBanned) + "\n"); }
             catch (Exception e) { Log?.LogError("SaveBans: " + e); }
         }
+        // 1.9.13 (owner 2026-10-20: "turn of the team kill warning at the end of a match while the vote is up for the next map",
+        // "they don't go to the log at all"). After the result is in, players shoot each other for fun during the vote; none of
+        // that is a teamkill. Ended = the game's own resolution is no longer Ongoing (every DeclareEndGame: victory, defeat,
+        // a native draw), or the plugin declared a draw without one (ForceDraw's fallback leaves the game Ongoing).
+        static bool _drawEnded;
+        internal static bool MatchEnded()
+        {
+            try { if (GameManager.gameResolution != GameResolution.Ongoing) return true; } catch { }
+            return _drawEnded;
+        }
+        internal static void ResetMatchEnded() { _drawEnded = false; }
+
         internal static void ClearMatchTeamkills() { _tkCount.Clear(); _tkRankZero.Clear(); _tkEventStart.Clear(); _tkReportStart.Clear(); _tkCollatStart.Clear(); _killWin.Clear(); _tkJudge.Clear(); _tkQueue.Clear(); _tkKicks.Clear(); _tkCollateralCount.Clear(); _lastLaunch.Clear(); _lastNuclearLaunch.Clear(); _lastGunHit.Clear(); _lastSubmunition.Clear(); ClearPendingBalance(); }   // per-match reset (bans persist)
 
         // Emit a teamkill-moderation event to the bot ([NOSTATS] line it tails) -> activity log + the webcc
@@ -4249,7 +4261,7 @@ namespace NukeStats
             {
                 Trace("CheckTeamkill");
                 if (dead == null) return;
-                bool tkOn = (TeamkillEnforce == null || TeamkillEnforce.Value);
+                bool tkOn = (TeamkillEnforce == null || TeamkillEnforce.Value) && !MatchEnded();   // 1.9.13: nothing after the match ended
                 Player victim = null; try { if (dead is Aircraft dv) victim = dv.Player; } catch { }
                 if (victim != null && IsAdminEjecting(Sid(victim))) return;
                 bool closedLife = false;   // 1.1.29: this death ended an OPEN life -> a genuine shot-down (not an already-ejected pilot's empty hull)
@@ -6501,6 +6513,7 @@ namespace NukeStats
                     }
                 }
                 // No Draw EndType — do NOT use Defeat. Chat announce is already done by the caller.
+                _drawEnded = true;         // 1.9.13: the match has ended (no teamkill judging until the next mission)
                 _timeoutResolved = true;   // 1.8.5 audit: a declared draw is final - the timeout tick must not crown a native-score winner after it
                 EmitDrawFrame();
                 Log?.LogInfo("[draw] no Draw/Tie/Stalemate EndType — emitted plugin draw frame, skipped DeclareEndGame (no false Victory/Defeat crown)");
@@ -8495,7 +8508,7 @@ namespace NukeStats
             if (!_fired) { _fired = true; NukeStatsPlugin.Log?.LogInfo("[diag] ServerMissionStartPlayer hooked (rank floor)"); }
             try
             {
-                if (!ReferenceEquals(_lastMission, __0)) { _lastMission = __0; NukeStatsPlugin.AdvanceGame(); NukeStatsPlugin.ClearMatchTeamkills(); NukeStatsPlugin.ResetReconMeters(); NukeStatsPlugin.ClearForfeitVotes(); NukeStatsPlugin.ResetCatchup(); NukeStatsPlugin.ResetRankFunds(); }  // new game -> advance balance move-exemption + reset teamkill + forfeit + catch-up + rank funds (1.1.29: PvP-suppression id set removed)
+                if (!ReferenceEquals(_lastMission, __0)) { _lastMission = __0; NukeStatsPlugin.AdvanceGame(); NukeStatsPlugin.ClearMatchTeamkills(); NukeStatsPlugin.ResetMatchEnded(); NukeStatsPlugin.ResetReconMeters(); NukeStatsPlugin.ClearForfeitVotes(); NukeStatsPlugin.ResetCatchup(); NukeStatsPlugin.ResetRankFunds(); }  // new game -> advance balance move-exemption + reset teamkill + forfeit + catch-up + rank funds (1.1.29: PvP-suppression id set removed)
                 if (__0 == null || __1 == null || __0.missionSettings == null) return;
                 int baseWant = __0.missionSettings.playerStartingRank;
                 // PvP matches (Escalation/Terminal): floor EVERY player to PvpStartingRank, on top of the

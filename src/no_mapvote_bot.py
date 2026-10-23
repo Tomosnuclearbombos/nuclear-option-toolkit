@@ -1381,6 +1381,13 @@ class RemoteCommand:
                     resp = body
                 if DEBUG:
                     print(f"[rcmd] {name}{args} -> code={code} {resp}")
+                # The game answers one command per connection and then hangs up, so close it now; the next send
+                # connects fresh instead of failing on the dead socket and logging a reconnect.
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
                 return (code, resp) if return_code else resp
             except (OSError, ConnectionError) as e:
                 print(f"[rcmd] {name} failed ({e})"
