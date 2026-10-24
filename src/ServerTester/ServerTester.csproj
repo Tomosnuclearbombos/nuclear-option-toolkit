@@ -18,7 +18,7 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>disable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>Nuclear Option Server Tester</Product>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

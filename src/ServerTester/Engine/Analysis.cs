@@ -554,7 +554,7 @@ namespace ServerTester.Engine
             sb.AppendLine("CPU: " + cpu.Model + ", " + cpu.Cores.Count + " cores / " + cpu.Threads + " threads"
                           + (cpu.Hybrid ? " (" + fast + " fast, " + (cpu.Cores.Count - fast) + " efficient)" : ""));
             sb.AppendLine("Load: " + run.Options.Mission + " (" + (run.Options.Mission == TestPlan.RealisticBenchmark
-                          ? "the full Escalation battle, every ground unit and ship" : "Escalation's map, aircraft only, guns only") + "), " + run.AiReached + " AI aircraft, nobody connected. Cores and workers compared at " + TestPlan.Compare(run.Options) + " fps.");
+                          ? "the full Escalation battle, every ground unit and ship" : "Escalation's map, aircraft only: Compasses and Vagrants with guns and heat-seeking missiles") + "), " + run.AiReached + " AI aircraft, nobody connected. Cores and workers compared at " + TestPlan.Compare(run.Options) + " fps.");
             if (run.StoppedBecause != null) sb.AppendLine("The test stopped early: " + run.StoppedBecause + ". The results are from before that.");
             sb.AppendLine();
             sb.AppendLine("WHAT TO SET");

@@ -107,12 +107,13 @@ against it too.
    the server should never run on the efficient ones. Untick any core in the list you won't give your server: the core
    count tests then count up through the ones ticked, fastest first.
 3. **Pick the test mission.** Both are the game's Escalation on its own map, with a fixed AI load the tester sets
-   (60 AI aircraft unless you change it: a quarter BDF, three quarters PALA, with PALA flying at double skill), so
+   (60 AI aircraft unless you change it, with PALA flying at double skill; in the Stress Test that's half BDF and half PALA), so
    every machine is tested with the same work. More AI gives the physics workers more to do and shows their
    differences better, however, it also asks more of the CPU.
    - **Stress Test** is for finding your settings. It has aircraft only: no ground vehicles, ships or anti-aircraft,
-     and guns as the only weapons, so the AI fight each other and land to rearm, nothing can end the mission and the
-     load stays steady from one run to the next.
+     just Compasses and Vagrants with guns and heat-seeking missiles, so the AI fight each other and land to rearm, and the
+     load stays steady from one run to the next. It keeps Escalation's objectives, so a side can win: the mission then
+     loads again and the tester repeats the step it was on.
    - **Realistic Benchmark** is for checking your settings in a real battle once the Stress Test has found them. It
      is the full Escalation, set up as co-op on the BDF side, with every ground unit and ship. It is busier and less
      steady, and a side can win: the mission then loads again and the tester repeats the step it was on.

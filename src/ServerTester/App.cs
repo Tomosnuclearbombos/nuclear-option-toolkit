@@ -16,7 +16,7 @@ namespace ServerTester
 {
     public sealed class App : Application
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
         // the first of these the system has: lines of numbers and the log stay in columns
         public static readonly FontFamily Mono = new FontFamily("Cascadia Mono, Consolas, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, monospace");
 
