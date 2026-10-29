@@ -248,7 +248,7 @@ is unknown instead of guessing.
 
 ## Discord
 
-[dsc.gg/tomosnukes](https://dsc.gg/tomosnukes). Ask there if you get stuck setting it up, or come
+[dsc.gg/pta-nukes](https://dsc.gg/pta-nukes). Ask there if you get stuck setting it up, or come
 and play on the servers I run it on.
 
 ## A note on AI
