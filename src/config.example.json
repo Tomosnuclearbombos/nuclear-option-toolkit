@@ -8,6 +8,7 @@
     "log_path": "/home/container/console.log",
     "rcmd_host": "your-host.example.net",
     "rcmd_port": 5550,
+    "plugin_cmd_via_rcon": true,
     "panel_url": "https://panel.yourhost.example",
     "server_id": "abcd1234",
     "local_game_dir": "",

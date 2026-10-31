@@ -1,15 +1,15 @@
 # Settings guide
 
-All 113 settings, in plain English. They're in the dashboard under **Settings → Game Settings**, and
+All 126 settings, in plain English. They're in the dashboard under **Settings → Game Settings**, and
 this page is the same list written out.
 
 Each one gives the name, what it does, and the value it ships with. You can change them while the
-server is running, and most take effect on the next tick.
+server is running, and most take effect on the next tick. The few that need a restart say so.
 
 ## Contents
 
-- [Messages & Feed](#messages--feed), 2 settings
-- [Scoring & Ranks](#scoring--ranks), 6 settings
+- [Messages & Feed](#messages--feed), 5 settings
+- [Scoring & Ranks](#scoring--ranks), 16 settings
 - [Rank + Fund catch-up](#rank--fund-catch-up), 3 settings
 - [Match](#match), 14 settings
 - [End of Match & Votes](#end-of-match--votes), 7 settings
@@ -23,6 +23,21 @@ server is running, and most take effect on the next tick.
 
 ### Custom chat
 The plugin writes its own chat and join lines (faction colours; rank tags when the rank ladder is on). OFF = chat stays completely native - no rewriting at all.
+
+*Default: `on`*
+
+### Native / commands
+Registers the plugin's and the bot's commands as the game's own "/" commands, so they show in the game's command list. Typing them with "!" still works. Needs a game server restart to apply.
+
+*Default: `on`*
+
+### Rank server tag
+Sets each player's server tag (shown next to their name) to their rank. Rank only. Players only see it with server tags turned on in the game's chat settings.
+
+*Default: `on`*
+
+### Remote command for the bot
+Registers the "nukestats" remote command on the game's remote-command port, so the bot can send plugin commands straight to the game instead of dropping plugin_cmd files (it falls back to the files on its own). Anyone who can reach the remote-command port can run plugin commands through it, and in the standard setup the relay port is reachable from the internet. Turn this off if you don't want that: the bot then sends plugin commands as plugin_cmd files. Needs a game server restart to apply.
 
 *Default: `on`*
 
@@ -62,6 +77,56 @@ A single score update above this many points per second is flagged in the activi
 Rank points to every player on the winning side at match end (server rank, not in-game score). Needs Award: Win / Placement Points ON or they are discarded.
 
 *Default: `200`, range 0–2000*
+
+### In-game score changes
+OFF by default (the game's own score). ON = the in-game score for collected and returned pilots, repairs, deploys, supply drops, spotting and jamming bonuses and base captures is replaced by the amounts in the Points rows below. Funds stay as the game pays them. None of the Points amounts do anything until this is on.
+
+*Default: `off`*
+
+### Score: pilot collected
+Only applies when In-game score changes is on. In-game score per downed pilot collected (rescued or captured), replacing the game's 2 or 3 x (1 + rank).
+
+*Default: `10`, range 0–500*
+
+### Score: pilot returned
+Only applies when In-game score changes is on. In-game score per collected pilot returned: the collecting aircraft lands at a friendly airbase or carrier.
+
+*Default: `40`, range 0–500*
+
+### Score: repair
+Only applies when In-game score changes is on. In-game score per completed repair, replacing the game's value. No limit.
+
+*Default: `25`, range 0–500*
+
+### Score: unit deployed
+Only applies when In-game score changes is on. In-game score per unit deployed from cargo. Only counts once the dropping aircraft has been up for Score: deploy wait.
+
+*Default: `25`, range 0–500*
+
+### Score: supply drop
+Only applies when In-game score changes is on. In-game score per naval supply or ammo drop. Only counts once the dropping aircraft has been up for Score: deploy wait.
+
+*Default: `25`, range 0–500*
+
+### Score: deploy wait (s)
+Only applies when In-game score changes is on. Deploys and supply drops only score from this many seconds after the dropping aircraft spawned, so spawning and dropping straight away earns nothing.
+
+*Default: `120`, range 0–1800*
+
+### Score: spotting bonus
+Only applies when In-game score changes is on. In-game score per spotting bonus (the game pays it when the spotting threshold is reached), replacing the game's value.
+
+*Default: `5`, range 0–200*
+
+### Score: jamming bonus
+Only applies when In-game score changes is on. In-game score per jamming bonus, replacing the game's value.
+
+*Default: `15`, range 0–200*
+
+### Score: base capture
+Only applies when In-game score changes is on. In-game score per player credited with a base capture, replacing the game's share.
+
+*Default: `150`, range 0–1000*
 
 ## Rank + Fund catch-up
 
@@ -279,7 +344,7 @@ Spawn altitude in metres for the brief Cricket used by !swapteam/!forceteamswap 
 ## Moderation
 
 ### Admin SteamIDs
-Comma-separated SteamIDs allowed to use the admin chat commands; also the list Exempt Admins from Auto-Kick reads. Panel moves don't need it, and a bare !swapteam (no player named) stays public for everyone.
+Comma-separated SteamIDs allowed to use the admin chat commands; also the list Exempt Admins from Auto-Kick reads. Panel moves don't need it, and a bare !swapteam (no player named) stays public for everyone. Listed admins also get the game's Admin level when they join, so they see the admin "/" commands in the game's command list.
 
 *Default: ``*
 

@@ -1312,15 +1312,18 @@ def parse_chat_line(line):
 
 
 def extract_vote(message):
-    """Map a chat message to a VOTE_OPTIONS key, or None. Votes must be '!'-prefixed
-    (e.g. !1, or !vote 1) so a bare number typed in normal chat isn't counted."""
+    """Map a chat message to a VOTE_OPTIONS key, or None. Accepts !1, !vote 1, or a bare
+    1 or 2 digit number on its own (e.g. 3). It is only called while a ballot is open, and a
+    number that isn't on the ballot still returns None. Any other text is ordinary chat."""
     msg = message.strip()
     if msg.lower().startswith("!vote"):
         msg = msg[len("!vote"):].strip()
     elif msg.startswith("!"):
         msg = msg[1:].strip()            # !1 -> 1
+    elif re.fullmatch(r"\d{1,2}", msg):
+        pass                             # bare 1 or 2 digit number -> same as !N
     else:
-        return None                      # bare text/number is ordinary chat, not a vote
+        return None                      # other bare text is ordinary chat, not a vote
     parts = msg.split()
     token = parts[0] if parts else ""
     return token if token in VOTE_OPTIONS else None
@@ -8232,9 +8235,60 @@ def set_cfg_dispatch(rc, key, value, owner):
     return {"ok": False, "error": "unknown owner"}
 
 
+# Plugin 2.1.0 registers a "nukestats" remote command (Chat.RemoteCommand, on by default). It takes
+# the "|" parts of a plugin_cmd line and queues them for the game's main thread, answering 2000
+# ("queued <verb>"). The bot tries that first; any other answer, an error, or no remote-command
+# host configured -> the plugin_cmd file over SFTP, as before. Turn it off per server with
+# config.json server.plugin_cmd_via_rcon = false (or NOST_PLUGIN_CMD_VIA_RCON=0).
+PLUGIN_CMD_VIA_RCON = str(_cfg("server.plugin_cmd_via_rcon", "NOST_PLUGIN_CMD_VIA_RCON", "true")).strip().lower() in ("1", "true", "yes", "on")
+PLUGIN_CMD_RCON_RETRY_S = 300            # after a failed try, use the file only for this long
+_PLUGIN_CMD_RCON_STATE = {"ok": None, "skip_until": 0.0}
+
+
+def _plugin_cmd_rcon_configured():
+    host = str(RCMD_HOST or "").strip().lower()
+    return bool(host) and not host.endswith(".example.net") and host != "your-host.example.net"
+
+
+def _plugin_cmd_rcon(line):
+    """Send one plugin_cmd line as the 'nukestats' remote command. True = the game queued it.
+    False = use the plugin_cmd file. Logs only when the outcome changes, and after a failure
+    skips the remote command for PLUGIN_CMD_RCON_RETRY_S so a dead port costs nothing per line."""
+    st = _PLUGIN_CMD_RCON_STATE
+    if not _plugin_cmd_rcon_configured() or time.time() < st["skip_until"]:
+        return False
+    parts = line.split("|")
+    # The game reads at most 2048 bytes per remote command (anything longer is answered 4002
+    # BadLength), so a long line (a big whisper, a long setcfg list) goes by file on its own.
+    if len(json.dumps({"name": "nukestats", "arguments": parts}).encode("utf-8")) > 2048:
+        return False
+    verb = parts[0]
+    try:
+        code, resp = RemoteCommand(RCMD_HOST, RCMD_PORT, timeout=3).send("nukestats", *parts, return_code=True)
+    except Exception as e:                       # noqa: BLE001 - the file path always remains
+        code, resp = None, str(e)
+    if code == 2000:
+        if st["ok"] is not True:
+            activity(f"Plugin commands now go by remote command 'nukestats' (first: {verb} -> {str(resp)[:80]})", "CMD")
+        st["ok"] = True
+        return True
+    # Only an unreachable port, or no 'nukestats' command (4004: older plugin or Chat.RemoteCommand
+    # off), pauses the remote command; any other answer sends just this one line by file.
+    if code is None or code == 4004:
+        if st["ok"] is not False:
+            activity(f"Remote command 'nukestats' {verb} answered {code} {str(resp)[:80]}; using plugin_cmd files "
+                     f"(retry in {PLUGIN_CMD_RCON_RETRY_S // 60} min)", "!")
+        st["ok"] = False
+        st["skip_until"] = time.time() + PLUGIN_CMD_RCON_RETRY_S
+    return False
+
+
 def _drop_plugin_cmd(body: str):
-    """Atomically drop a plugin_cmd_<id>.txt for the NukeStats plugin to consume.
-    Uses the persistent bot SFTP session (no fresh handshake per whisper/command)."""
+    """Hand one command to the NukeStats plugin: by the 'nukestats' remote command when it
+    answers 2000, otherwise atomically drop a plugin_cmd_<id>.txt for the plugin to consume
+    (persistent bot SFTP session, no fresh handshake per whisper/command)."""
+    if PLUGIN_CMD_VIA_RCON and _plugin_cmd_rcon(font_safe(body).rstrip("\n")):
+        return
     global _plugin_cmd_id
     cid = int(time.time() * 1000)
     if cid <= _plugin_cmd_id:
@@ -12752,7 +12806,7 @@ if __name__ == "__main__":
 
         # vote extraction against the most recent ballot
         print("\n[selftest] extract_vote (against the last ballot above):")
-        for msg in ["!1", "!vote 2", "!3 go", "1", "4", "!9", "hi"]:
+        for msg in ["!1", "!vote 2", "!3 go", "1", "4", "12", "123", "!9", "hi"]:
             print(f"  {msg!r:>9} -> {extract_vote(msg)}")
 
         if RANKS:

@@ -113,6 +113,12 @@ and Updates. Missions, Moderation and Leaderboard have their own buttons.
 
 ## Chat commands
 
+Every command below also works with `/` instead of `!`, and with `/` it shows in the game's own
+command list as you type; picking a player from that list fills in their name for you. Three are
+different with `/`: `/help` is the game's own list of `/` commands, a ballot vote is `/vote 3` (or
+just `3`), and the admin balance pass is `/balancenow`, because `/balance` explains balancing to
+everyone. Turn the `/` commands off with `Chat.SlashCommands` (needs a restart).
+
 - `!help`: the list of server commands
 - `!rank`: your rank, points, and progress to the next one
 - `!points`: your lifetime points total
@@ -124,18 +130,21 @@ and Updates. Missions, Moderation and Leaderboard have their own buttons.
 - `!autobalance` / `!ab`: how PvP team balancing works
 - `!votemap`: calls a mid-mission map change
 - `!y` / `!n`: vote on a `!votemap` approval poll
-- `!1` to `!6`: vote for that map on an open ballot
+- `!1` to `!6`: vote for that map on an open ballot. A plain number on its own (`3`) counts too
 - `!spec`: move yourself to spectator
 - `!swapteam`: swap sides, but only if the other side has fewer players
 - `!forfeit` / `!f`: surrender the PvP match, needs a majority
 
-Admin only: `!balance`, `!forceteamswap <player>`, `!setrank <player> <n>`,
+Admin only: `!balance` (`/balancenow`), `!forceteamswap <player>`, `!setrank <player> <n>`,
 `!setfunds <player> <amount>` and `!addfunds <player> <amount>`. Admins are the SteamIDs listed in
-`Admin.SteamIds`, which starts empty.
+`Admin.SteamIds`, which starts empty. Listed admins also get the game's Admin level when they join.
+
+Each player's rank is set as their server tag (`Chat.RankServerTag`). Players only see it with server
+tags turned on in the game's chat settings.
 
 ## Settings
 
-All 113 of them are in the dashboard under Settings > Game Settings. Searchable, each with a
+All 126 of them are in the dashboard under Settings > Game Settings. Searchable, each with a
 description in plain English and the value it ships with. Most take effect on the next tick.
 
 ![Game settings](docs/preview/settings.png)
@@ -228,6 +237,12 @@ router is fine too. Don't put it on a public IP.
 If you do need it wider, set `web.host` to `0.0.0.0` in `config.json` (or the `NOCC_HOST`
 environment variable), and set `web.auth_token` (or `NOCC_AUTH_TOKEN`) at the same time. Changes
 then have to carry that token in an `X-NOCC-Token` header.
+
+The relay port (default `5550`) is reachable from the internet in the standard setup, because the
+bot on your PC connects to it. It already takes the game's own remote commands (kick, ban, chat, next
+mission). With `Chat.RemoteCommand` on, which is the default, it also takes every plugin command,
+including `setcfg`, which can change any plugin setting such as `Admin.SteamIds`. If you don't want
+that, turn `Chat.RemoteCommand` off and restart; the bot then uses plugin_cmd files over SFTP.
 
 `run.bat` and `secrets.json` hold your SFTP password. Both are gitignored. Don't commit them.
 

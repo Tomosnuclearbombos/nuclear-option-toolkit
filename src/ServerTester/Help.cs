@@ -9,7 +9,7 @@ namespace ServerTester
             + "to check them with afterwards.";
 
         public const string Ai =
-            "This is how many AI aircraft the test keeps up, a quarter BDF and three quarters PALA. More AI makes the physics worker "
+            "This is how many AI aircraft the test keeps up, half BDF and half PALA. More AI makes the physics worker "
             + "differences show, although, it asks a lot more of the CPU. 80 suits most PCs.";
 
         public const string Baseline =

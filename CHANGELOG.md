@@ -2,6 +2,19 @@
 
 What changed in each public release. Every GitHub release shows its own section from this file.
 
+## [2.1.0] 2026-10-31
+
+* **Built for game 0.34.6.** The plugin is built against the 0.34.6 game files. Building it yourself now also needs `UniTask.dll` from the game's `NuclearOptionServer_Data/Managed` folder in `libs/`.
+* **Commands with "/".** The plugin's and the bot's commands are now the game's own "/" commands, so they show in the game's command list as players type. "!" still works. Players on the `[Admin] SteamIds` list get the game's Admin level when they join, so only they see the admin commands. Turn it off with `Chat.SlashCommands` (needs a restart).
+* **Pick a player from the list.** In admin commands, a player picked from the "/" list works the same as typing their name.
+* **Vote with a plain number.** During a map vote, typing just the number (`3`) counts the same as `!3`.
+* **Rank as the server tag.** Each player's rank is set as their game server tag (`Chat.RankServerTag`). Players only see it with server tags turned on in the game's chat settings. In the plugin's chat and join lines the rank now shows in its rank colour, inside brackets in the player's name colour.
+* **Shorter replies.** Command replies are shorter, each line fits the chat box, `!help` separates commands with " | ", and the on screen hints show commands with "/".
+* **In-game score changes.** The plugin can set the in-game score for collected and returned pilots, repairs, deploys, supply drops, spotting and jamming bonuses and base captures. It's off by default. Turn on In-game score changes (`Points.Enabled`) under Game Settings, Scoring & Ranks, and every amount can be changed there. The amounts do nothing until it's on.
+* **Server test uses the new Stress Test.** The plugin's own server test now runs the Server Tester 1.1.0 Stress Test (Compasses and Vagrants with guns and heat seeking missiles, half each side), so its results compare with the Server Tester's.
+* **Welcome and rank floor lines.** Players are told "NukeStats 2.1.0 is on this server" when they join, and "Rank floor raised to N" when the PvP starting rank floor goes up.
+* **Plugin commands by remote command.** The plugin adds a "nukestats" remote command on the game's remote-command port (`Chat.RemoteCommand`, on by default, needs a restart). The bot sends plugin commands through it first, and uses plugin_cmd files over SFTP as before if it gets any other answer, so an older plugin still works. Turn the bot side off with `server.plugin_cmd_via_rcon` set to false in config.json. Anyone who can reach the remote-command port can run plugin commands through it, and in the standard setup the relay port is reachable from the internet; turn `Chat.RemoteCommand` off if you don't want that (see Security in the README).
+
 ## [1.9.13] 2026-10-23
 
 * **No teamkill warnings after a match.** Once a match has ended, friendly fire while the vote for the next map is up is no longer judged, warned, punished or logged.

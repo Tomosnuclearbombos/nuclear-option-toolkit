@@ -80,7 +80,7 @@ namespace NukeStats
             Start = config.Bind("SelfTest", "Start", false,
                 "True starts the server test (setcfg|SelfTest.Start|true). It goes back to false at once, so a restart never starts one.");
             StepSeconds = config.Bind("SelfTest", "StepSeconds", 30, "Seconds each step measures, in whole 15 s measurements (15 to 120).");
-            Ai = config.Bind("SelfTest", "Ai", 60, "AI aircraft the test runs with (a quarter BDF, three quarters PALA, as the Server Tester).");
+            Ai = config.Bind("SelfTest", "Ai", 60, "AI aircraft the test runs with (half BDF, half PALA, as the Server Tester).");
             WarmupSeconds = config.Bind("SelfTest", "WarmupSeconds", 120, "Seconds the mission runs with the AI up before the first step.");
             Alternate = config.Bind("SelfTest", "Alternate", true,
                 "Measure the baseline again after each core and worker pair, which takes heat and clock drift out. "
@@ -1053,7 +1053,7 @@ namespace NukeStats
 
         // ---------------------------------------------------------------- AI load (Perf.Tick, once a second in a mission)
         // Each side's AI aircraft limit set so the total is the test's load, each side keeping its share of the mission's own
-        // limits (the Stress Test: a quarter BDF, three quarters PALA), with the per-player parts off, so every machine is
+        // limits (the Stress Test: half BDF, half PALA), with the per-player parts off, so every machine is
         // tested with the same load. Only on the test mission while a test runs (or the Server Tester's own build).
         static readonly Dictionary<FactionHQ, int> _missionAi = new Dictionary<FactionHQ, int>();
 

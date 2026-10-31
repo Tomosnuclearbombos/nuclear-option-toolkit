@@ -172,7 +172,7 @@ namespace ServerTester.Engine
 
         // ---------------------------------------------------------------- the test server's settings
         // Hidden, passworded, on its own ports, the chosen mission from the payload (Stress Test: Escalation's map with
-        // aircraft only and guns only, so nothing can end it; Realistic Benchmark: the full Escalation battle), and an
+        // aircraft only, Compasses and Vagrants with guns and heat-seeking missiles; Realistic Benchmark: the full Escalation battle), and an
         // empty server never stops its mission.
         public static void WriteConfigs(TestOptions o)
         {

@@ -35,7 +35,7 @@
     Drop the referenced DLLs into a sibling  ./libs/  folder before building.
     Get them from:
       * the server container: NuclearOptionServer_Data/Managed/  (Assembly-CSharp*.dll,
-        UnityEngine*.dll, Mirage.dll)  [pull them with the bot's "get" admin flag]
+        UnityEngine*.dll, Mirage.dll, UniTask.dll)  [pull them with the bot's "get" admin flag]
       * the BepInEx pack:     BepInEx/core/  (BepInEx.dll, 0Harmony.dll)
     Private=false means: do not copy these into the output (they already exist on the server).
   -->
@@ -45,6 +45,10 @@
     </Reference>
     <Reference Include="0Harmony">
       <HintPath>libs/0Harmony.dll</HintPath><Private>false</Private>
+    </Reference>
+    <!-- the game's chat command API (ChatApi.cs) has UniTask overloads, so the compiler needs its types -->
+    <Reference Include="UniTask">
+      <HintPath>libs/UniTask.dll</HintPath><Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">
       <HintPath>libs/Assembly-CSharp.dll</HintPath><Private>false</Private>

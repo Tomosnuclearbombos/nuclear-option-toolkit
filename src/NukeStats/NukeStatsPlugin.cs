@@ -50,7 +50,7 @@ namespace NukeStats
     public class NukeStatsPlugin : BaseUnityPlugin
     {
         public const string Guid = "anz.nukestats";
-        public const string Version = "1.9.13";
+        public const string Version = "2.1.0";
         internal static ManualLogSource Log;
         internal static NukeStatsPlugin Instance;
 
@@ -209,6 +209,7 @@ namespace NukeStats
             PatchSafety.InstallGuard();   // before ANY hook: no hook of ours may go on a generic type's method
             _cfgFile = Config;   // cache the ConfigFile NOW — it survives the GameObject being destroyed, whereas Instance.Config later reads as Unity-null
             AiAirportRotation.Initialize(Config);
+            try { ChatApi.Initialize(Config); } catch (Exception e) { Log?.LogError("[chatapi] register: " + e); }   // 2.1.0: the game's native "/" commands + "nukestats" remote command (ChatApi.cs)
             AirbaseTaxi.Initialize(Config);     // 1.9.6 test 4: AI taxi/takeoff fixes (parts of Appulcake's AI Plane Unstuck)
             MissileBurnoutFix.Initialize(Config);   // 2026-10-15: the game's NL-98 burnout bug (missile never explodes)
             NukeBlastFix.Initialize(Config);   // 1.9.12: the game's 4096-object blast list (big nukes left random units undamaged)
@@ -216,6 +217,7 @@ namespace NukeStats
             PingKick.Initialize(Config);        // 1.9.1: high-ping kicker
             try { ResolveSteamPingAtStart(); } catch (Exception e) { Log?.LogError("[rtt] start lookup: " + e.Message); }   // 2026-10-15: not at the first join
             TkWatch.Initialize(Config);         // 1.9.4: teamkill watch list
+            try { Points.Initialize(Config); } catch (Exception e) { Log?.LogError("[points] init: " + e); }   // 2.1.0: in-game score changes, off by default (Points.cs); guarded so it can never stop the rest of Awake
             Perf.Initialize(Config);            // 1.9.5: frame timing + job worker count
             SelfTest.Initialize(Config);        // 2026-10-18: the Server Tester's automated test, run on this server (SelfTest.cs)
             OpenStaleNetGrace(60f);   // never strike stale netIds during boot/first scene load (AdvanceGame re-opens it per mission)
@@ -354,8 +356,11 @@ namespace NukeStats
             SkyDropIgnusBdf = Config.Bind("Admin", "SkyDropIgnusBdf", "75000,0",
                 "Drop point x,z for a player swapped to BDF (Boscali) on Ignus - far east, over the Boscali side.");
             AdminSteamIds   = Config.Bind("Admin", "SteamIds", "",
-                "Comma-separated SteamIDs allowed to use the IN-GAME team commands (!move/!spec/!join/!balance). " +
-                "The public !autobalance explainer works for everyone; command-centre moves don't need this.");
+                "Comma-separated SteamIDs allowed to use the IN-GAME admin commands (/move, /spec <player>, /balancenow, "
+                + "/setrank, /setfunds, /addfunds, /forceteamswap; the \"!\" forms work too). Listed admins also get the game's "
+                + "Admin permission level when they join (the game's /adminkick, and the admin \"/\" commands in its list); "
+                + "a SteamID added mid-session gets it at that player's next join. "
+                + "The public /autobalance explainer works for everyone; command-centre moves don't need this.");
             CustomChat      = Config.Bind("Chat", "CustomChat", true,
                 "Custom chat. ON = the plugin composes chat itself: player chat is REROUTED as a "
                 + "'[ACM] Brick: msg' server message with names in ABSOLUTE faction colours "
@@ -827,6 +832,7 @@ namespace NukeStats
                 MaybeSnapshot();
                 Perf.Lap(12);
                 MaybeCleanupPilots();
+                Points.Tick();                        // 2.1.0: collected pilots returned to a friendly base (1 Hz)
                 Perf.Lap(13);
                 MaybeBalance();
                 Perf.Lap(14);
@@ -2703,9 +2709,9 @@ namespace NukeStats
                 // THREE lines, grouped, owner's order: Server, Teams, Stats (1.3.15). !help itself is
                 // dropped - they just used it.
                 string[] lines = {
-                    "<color=#cfd8e3>Server</color>   <color=#FFC857>!votemap</color> \u00b7 <color=#cfd8e3>!notk</color> \u00b7 <color=#cfd8e3>!discord</color>",
-                    "<color=#36FFD0>Teams</color>    <color=#36FFD0>!spec</color> \u00b7 <color=#36FFD0>!swapteam</color> \u00b7 <color=#FFC857>!forfeit</color>",
-                    "<color=#55FF55>Stats</color>    <color=#55FF55>!rank</color> \u00b7 <color=#55FF55>!ranks</color> \u00b7 <color=#55FF55>!points</color> \u00b7 <color=#55FF55>!leaderboard</color> \u00b7 <color=#55FF55>!prestige</color>",
+                    $"<color=#cfd8e3>Server</color>   <color=#FFC857>{ChatApi.P}votemap</color> | <color=#cfd8e3>{ChatApi.P}notk</color> | <color=#cfd8e3>{ChatApi.P}discord</color>",
+                    $"<color=#36FFD0>Teams</color>    <color=#36FFD0>{ChatApi.P}spec</color> | <color=#36FFD0>{ChatApi.P}swapteam</color> | <color=#FFC857>{ChatApi.P}forfeit</color>",
+                    $"<color=#55FF55>Stats</color>    <color=#55FF55>{ChatApi.P}rank</color> | <color=#55FF55>{ChatApi.P}ranks</color> | <color=#55FF55>{ChatApi.P}points</color> | <color=#55FF55>{ChatApi.P}leaderboard</color> | <color=#55FF55>{ChatApi.P}prestige</color>",
                 };
                 string msg = string.Join("\n", lines);
                 Log?.LogInfo($"[help] -> {Sid(p)} : {lines.Length} lines, {msg.Length} chars, Cm={(Cm != null)}");
@@ -2985,7 +2991,7 @@ namespace NukeStats
         // surprise reproduces 1.4.5 behaviour exactly.
         static FieldInfo _unitHitFI;      // Unit.hit (protected RaycastHit) - the stored radar-alt linecast result
         static MemberInfo _waterMatMI;    // GameAssets.WaterMaterial (PhysicsModule-typed -> reflection only)
-        static bool IsOnWater(Aircraft ac)
+        internal static bool IsOnWater(Aircraft ac)
         {
             try
             {
@@ -3274,6 +3280,14 @@ namespace NukeStats
         // Never throws, never needs a live ChatManager - a colour can never break chat delivery.
         internal static string ChatFactionHex(FactionHQ hq) => FactionColourFallback(hq);
         internal static string ChatFactionHex(Player p) => ChatFactionHex(p != null ? p.HQ : null);
+        // A "#RRGGBB" colour from a data file, or the fallback when it isn't one.
+        internal static string HexOr(string col, string fallback)
+        {
+            col = (col ?? "").Trim();
+            bool ok = col.Length == 7 && col[0] == '#';
+            for (int i = 1; ok && i < 7; i++) ok = Uri.IsHexDigit(col[i]);
+            return ok ? col : fallback;
+        }
 
         // Retained no-op: 1.0.15–1.0.17 wrote owner-picked hexes INTO faction.color (wrong).
         // Vanilla faction.color is now the source of truth — never overwrite it.
@@ -4911,6 +4925,7 @@ namespace NukeStats
                 _nextCmdPoll = now + 1f;                                 // glance at the drop folder ~1/sec
                 TrackPresence(now);                                      // ~1/sec: maintain each player's join clock (new-joiner protection)
                 MaybeWelcome(now);                                       // ~1/sec: fire the one-time private "plugin vX is active" notice
+                ChatApi.SyncTags(now);                                   // every 5 s: rank in each player's server tag (Chat.RankServerTag)
                 string[] files;
                 try { files = Directory.GetFiles(Paths.GameRootPath, "plugin_cmd_*.txt"); }
                 catch { return; }
@@ -4994,7 +5009,7 @@ namespace NukeStats
             catch (Exception ex) { Log?.LogError("SetCfg: " + ex); return "error"; }
         }
 
-        static void ExecCommand(string line)
+        internal static void ExecCommand(string line)
         {
             Trace("ExecCommand");
             try
@@ -5164,7 +5179,7 @@ namespace NukeStats
                 _pendingMoves.Add(new Pending { p = p, to = null, due = Time.realtimeSinceStartup + 10f });  // realtime: see RequestMove
                 try
                 {
-                    BroadcastAll($"<color=#FFC857>{RankedName(p)} will be moved to spectate in 10s to balance teams - rejoin {smallerName} (fewer players), or type !spec now.</color>");
+                    BroadcastAll($"<color=#FFC857>{RankedName(p)} will be moved to spectate in 10s to balance teams. Rejoin {smallerName} (fewer players) or type {ChatApi.P}spec now.</color>");
                     Log?.LogInfo($"[balance] scheduled spectate for {RawNameOf(p)} in 10s");
                 }
                 catch (Exception e) { Log?.LogError("RequestBalanceSpectate announce: " + e); }
@@ -5298,8 +5313,10 @@ namespace NukeStats
                 string name = SafeText(RawNameOf(player));
                 if (string.IsNullOrEmpty(name)) return;
                 LoadRankMap();
+                // the rank in its own rank colour inside team-coloured brackets (as the game's server tag)
+                string tagPart = "";
                 if (!string.IsNullOrEmpty(sid) && RankMap.TryGetValue(sid, out var rc) && !string.IsNullOrEmpty(rc.label))
-                    name = "[" + rc.label + "] " + name;
+                    tagPart = $"<color={col}>[</color><color={HexOr(rc.color, col)}>{SafeText(rc.label)}</color><color={col}>]</color> ";
                 string fac = "";
                 try
                 {
@@ -5311,7 +5328,7 @@ namespace NukeStats
                 catch { }
                 if (string.IsNullOrEmpty(fac)) return;   // never emit truncated "X joined" without a faction name
                 fac = SafeText(fac);
-                Instance?.BroadcastAll($"<color={col}>{name}</color> <color=#FFFFFF>joined</color> <color={col}>{fac}</color>");
+                Instance?.BroadcastAll($"{tagPart}<color={col}>{name}</color> <color=#FFFFFF>joined</color> <color={col}>{fac}</color>");
             }
             catch (Exception e) { Log?.LogError("AnnounceJoinFaction: " + e); }
         }
@@ -5378,7 +5395,14 @@ namespace NukeStats
         Player Resolve(Player admin, string namePart)
         {
             namePart = (namePart ?? "").Trim().ToLowerInvariant();
-            if (namePart.Length == 0) { TellPlayer(admin, "name a player, e.g. !move bob primeva"); return null; }
+            if (namePart.Length == 0) { TellPlayer(admin, $"name a player, e.g. {ChatApi.P}move bob primeva"); return null; }
+            // a player picked from the game's "/" command list comes as a mention, "[@<SteamID>]": that exact player
+            if (namePart.Length > 3 && namePart.StartsWith("[@") && namePart.EndsWith("]"))
+            {
+                var bySid = FindPlayerBySid(namePart.Substring(2, namePart.Length - 3).Trim());
+                if (bySid == null) TellPlayer(admin, "<color=#FF5555>That player is no longer on the server.</color>");
+                return bySid;
+            }
             var hits = new List<Player>();
             foreach (var pl in Humans()) if (RawNameOf(pl).ToLowerInvariant().Contains(namePart)) hits.Add(pl);
             if (hits.Count == 0) { TellPlayer(admin, $"<color=#FF5555>No player matches '{namePart}'.</color>"); return null; }
@@ -5607,7 +5631,7 @@ namespace NukeStats
                 if (floor != _catchupAnnounced)
                 {
                     _catchupAnnounced = floor;
-                    Instance?.BroadcastAll($"<color=#9AD1FF>Rank catch-up:</color> <color=#FFFFFF>the starting rank now floors at</color> <color=#FFD700>{floor}</color>");
+                    Instance?.BroadcastAll($"<color=#9AD1FF>Rank floor</color> <color=#FFFFFF>raised to</color> <color=#FFD700>{floor}</color>");
                     Log?.LogInfo($"[catchup] floor now {floor} (base {baseRank}, raised {raised})");
                 }
                 if (fper > 0 && fmode == "catchup_all")
@@ -6664,7 +6688,7 @@ namespace NukeStats
 
         // ---- presence / first-seen clock (drives new-joiner protection) ----
         static readonly Dictionary<string, float> _firstSeen = new Dictionary<string, float>(StringComparer.Ordinal);
-        // per-session "Nuke-Option Plugin Version X is active" PRIVATE welcome: scheduled ~6s after first
+        // per-session "NukeStats X is on this server" PRIVATE welcome: scheduled ~6s after first
         // sighting (so the joining client's chat UI is ready), shown ONCE per session, and reset on leave
         // so a rejoin re-shows it. Parallels the _firstSeen presence clock above.
         static readonly Dictionary<string, float> _welcomeDue = new Dictionary<string, float>(StringComparer.Ordinal);
@@ -6698,7 +6722,7 @@ namespace NukeStats
                     var s = Sid(p);
                     if (string.IsNullOrEmpty(s) || _welcomed.Contains(s)) continue;
                     if (!_welcomeDue.TryGetValue(s, out var due) || now < due) continue;
-                    Instance?.TellPlayer(p, $"<color=#6cc8ff>Nuke-Option Plugin Version {Version} is active on this server.</color>");
+                    Instance?.TellPlayer(p, $"<color=#6cc8ff>NukeStats {Version} is on this server</color>");
                     _welcomed.Add(s);
                     _welcomeDue.Remove(s);
                 }
@@ -7195,16 +7219,17 @@ namespace NukeStats
         {
             try
             {
-                if (!TwoSides(out var A, out var B)) { TellPlayer(p, "<color=#FFC857>!swapteam only works in a PvP match with two teams.</color>"); return; }
+                if (!TwoSides(out var A, out var B)) { TellPlayer(p, $"<color=#FFC857>{ChatApi.P}swapteam only works in a PvP match with two teams.</color>"); return; }
                 FactionHQ mine = null; try { mine = p.HQ; } catch { }
                 if (mine == null || (!ReferenceEquals(mine, A) && !ReferenceEquals(mine, B)))
-                { TellPlayer(p, "<color=#FFC857>Pick a team first, then type !swapteam to switch to the smaller side.</color>"); return; }
+                { TellPlayer(p, $"<color=#FFC857>Pick a team first, then type {ChatApi.P}swapteam to switch to the smaller side.</color>"); return; }
                 FactionHQ other = ReferenceEquals(mine, A) ? B : A;
                 int mineN = Side(mine).Count, otherN = Side(other).Count;
                 string on = other.faction != null ? other.faction.factionName : "the other team";
                 if (otherN >= mineN)
                 {
-                    TellPlayer(p, $"<color=#FFC857>Can't swap to {on} - it isn't smaller ({otherN} vs your {mineN}). !swapteam only lets you move to the team with FEWER players, to keep it fair.</color>");
+                    TellPlayer(p, $"<color=#FFC857>Can't swap: {on} has {otherN}, your team has {mineN}.</color>");
+                    TellPlayer(p, $"<color=#CFCFCF>{ChatApi.P}swapteam only moves you to the team with fewer players.</color>");
                     return;
                 }
                 BeginSwap(p, p, false);   // self-swap (swapteam mechanic): spectate -> swap -> brief Cricket -> eject; keeps points + life
@@ -7242,7 +7267,7 @@ namespace NukeStats
                 {
                     string df = dest.faction != null ? dest.faction.factionName : "the other team";
                     if (admin != null) TellPlayer(admin, $"<color=#36FFD0>{(force ? "forceteamswap" : "swapteam")} {RankedName(tgt)} -> {df} started...</color>");
-                    else TellPlayer(tgt, $"<color=#FFC857>You're being moved to {df} to balance the teams - you keep your points and progress.</color>");
+                    else TellPlayer(tgt, $"<color=#FFC857>Moving you to {df} to balance the teams. You keep your points.</color>");
                     Log?.LogInfo($"[swap] begin {(force ? "force " : "")}{RawNameOf(tgt)} -> {df}{(admin == null ? " [autobalance]" : "")}");
                 }
                 catch (Exception e) { Log?.LogError("BeginSwap notice: " + e); }
@@ -7357,7 +7382,7 @@ namespace NukeStats
             {
                 if (ForfeitEnabled != null && !ForfeitEnabled.Value) { TellPlayer(p, "<color=#FFC857>Forfeit is disabled.</color>"); return; }
                 FactionHQ callerHQ = null; try { callerHQ = p.HQ; } catch { }
-                if (callerHQ == null) { TellPlayer(p, "<color=#FFC857>Join a team first - spectators can't call a forfeit.</color>"); return; }
+                if (callerHQ == null) { TellPlayer(p, "<color=#FFC857>Join a team first. Spectators can't call a forfeit.</color>"); return; }
                 if (!TwoSides(out var A, out var B)) { TellPlayer(p, "<color=#FFC857>Forfeit votes are only for PvP matches.</color>"); return; }
                 // MINIMUM TEAM SIZE. need = team.Count/2 + 1, so a team of ONE needed exactly one vote:
                 // a single player alone on a side could end the entire match instantly for everyone on
@@ -7388,7 +7413,7 @@ namespace NukeStats
                     if (vote != null && (now - vote.startedAt) < cd)         // still cooling down
                     {
                         int left = (int)Math.Ceiling(cd - (now - vote.startedAt));
-                        TellPlayer(p, $"<color=#FFC857>Forfeit vote on cooldown - try again in {left}s.</color>");
+                        TellPlayer(p, $"<color=#FFC857>Forfeit vote on cooldown. Try again in {left}s.</color>");
                         return;
                     }
                     vote = new ForfeitVote { startedAt = now };
@@ -7407,7 +7432,7 @@ namespace NukeStats
                 if (yes >= need)
                 {
                     _forfeitVotes.Remove(myFac);
-                    BroadcastAll($"<color=#FF6A6A>** {myFac} has FORFEITED the match - {foeFac} wins! **</color>");
+                    BroadcastAll($"<color=#FF6A6A>** {myFac} has FORFEITED the match. {foeFac} wins! **</color>");
                     Log?.LogInfo($"[forfeit] {myFac} forfeited ({yes}/{team.Count}) -> declaring {foeFac} victory");
                     // 1.2.5: the feed never saw forfeits at all - the line above goes to
                     // BepInEx/LogOutput.log, which the bot does not tail. Emit a real frame.
@@ -7422,7 +7447,7 @@ namespace NukeStats
                 {
                     string lead = started ? $"{RankedName(p)} called a FORFEIT vote. " : "";
                     foreach (var tp in team)
-                        TellPlayer(tp, $"<color=#FFC857>{lead}Forfeit (surrender) vote: {yes}/{need} of {myFac}. Type <color=#55FF55>!forfeit</color> / <color=#55FF55>!f</color> to agree.</color>");
+                        TellPlayer(tp, $"<color=#FFC857>{lead}Forfeit (surrender) vote: {yes}/{need} of {myFac}. Type <color=#55FF55>{ChatApi.P}forfeit</color> or <color=#55FF55>{ChatApi.P}f</color> to agree.</color>");
                 }
                 catch (Exception e) { Log?.LogError("forfeit notify: " + e); }
             }
@@ -7475,23 +7500,23 @@ namespace NukeStats
                 if (cmd == "swapteam" && parts.Length == 1) { Cm = cm; HandlePublicSwap(p); return true; }
 
                 bool ours = cmd == "move" || cmd == "team" || cmd == "join"
-                         || cmd == "spec" || cmd == "spectate" || cmd == "unteam" || cmd == "balance"
+                         || cmd == "spec" || cmd == "spectate" || cmd == "unteam" || cmd == "balance" || cmd == "balancenow"
                          || cmd == "setrank" || cmd == "setfunds" || cmd == "addfunds"
                          || cmd == "swapteam" || cmd == "forceteamswap";
                 if (!ours) return false;                                  // not ours -> normal chat
                 Cm = cm;
                 if (!IsAdmin(p)) { TellPlayer(p, "<color=#FF5555>You're not authorised to use that command.</color>"); return true; }
 
-                if (cmd == "balance")
+                if (cmd == "balance" || cmd == "balancenow")   // "/balancenow": "/balance" is the bot's public explainer
                 {
                     int n = BalanceOnce(true);
                     TellPlayer(p, n > 0 ? "<color=#36FFD0>Balance pass: moved 1 player.</color>"
-                                        : "<color=#FFC857>Balance pass: nothing to do (need a lopsided PvP match with someone movable).</color>");
+                                        : "<color=#FFC857>Balance pass: nothing to move.</color>");
                     return true;
                 }
                 if (cmd == "setrank")                                     // !setrank <player> <n> : set in-game rank
                 {
-                    if (parts.Length < 3) { TellPlayer(p, "<color=#FFC857>usage: !setrank <player> <number></color>"); return true; }
+                    if (parts.Length < 3) { TellPlayer(p, $"<color=#FFC857>usage: {ChatApi.P}setrank <player> <number></color>"); return true; }
                     if (!int.TryParse(parts[parts.Length - 1], out int rk)) { TellPlayer(p, "<color=#FF5555>Rank must be a whole number.</color>"); return true; }
                     var tgt = Resolve(p, Join(parts, 1, parts.Length - 1));
                     if (tgt != null) { SetPlayerRank(tgt, rk); TellPlayer(p, $"<color=#36FFD0>Set {RankedName(tgt)}'s in-game rank to {tgt.PlayerRank}.</color>"); }
@@ -7500,7 +7525,7 @@ namespace NukeStats
                 if (cmd == "setfunds" || cmd == "addfunds")              // !setfunds/!addfunds <player> <amount> : in-game funds
                 {
                     bool add = cmd == "addfunds";
-                    if (parts.Length < 3) { TellPlayer(p, $"<color=#FFC857>usage: !{cmd} <player> <amount></color>"); return true; }
+                    if (parts.Length < 3) { TellPlayer(p, $"<color=#FFC857>usage: {ChatApi.P}{cmd} <player> <amount></color>"); return true; }
                     if (!float.TryParse(parts[parts.Length - 1], NumberStyles.Float, CultureInfo.InvariantCulture, out float amt))
                     { TellPlayer(p, "<color=#FF5555>Amount must be a number.</color>"); return true; }
                     var tgt = Resolve(p, Join(parts, 1, parts.Length - 1));
@@ -7515,16 +7540,16 @@ namespace NukeStats
                 }
                 if (cmd == "swapteam" || cmd == "forceteamswap")          // ADMIN TEST: move team + brief Cricket spawn + eject (resets the client UI)
                 {
-                    if (parts.Length < 2) { TellPlayer(p, $"<color=#FFC857>usage: !{cmd} <player></color>"); return true; }
+                    if (parts.Length < 2) { TellPlayer(p, $"<color=#FFC857>usage: {ChatApi.P}{cmd} <player></color>"); return true; }
                     var tgt = Resolve(p, Join(parts, 1, parts.Length));
                     if (tgt != null) BeginSwap(tgt, p, cmd == "forceteamswap");
                     return true;
                 }
                 // move / team / join :  <player> <faction>   (faction is the last token)
-                if (parts.Length < 3) { TellPlayer(p, $"<color=#FFC857>usage: !{cmd} <player> <boscali|primeva></color>"); return true; }
+                if (parts.Length < 3) { TellPlayer(p, $"<color=#FFC857>usage: {ChatApi.P}move <player> <boscali|primeva></color>"); return true; }
                 string facKey = parts[parts.Length - 1];
                 var hq = FindFaction(facKey);
-                if (hq == null) { TellPlayer(p, $"<color=#FF5555>Unknown faction '{facKey}' (use boscali / primeva).</color>"); return true; }
+                if (hq == null) { TellPlayer(p, $"<color=#FF5555>Unknown faction '{facKey}' (use boscali or primeva).</color>"); return true; }
                 var target = Resolve(p, Join(parts, 1, parts.Length - 1));
                 if (target != null)
                 {
@@ -7539,33 +7564,61 @@ namespace NukeStats
             catch (Exception e) { Log?.LogError("TryHandleChatCommand: " + e); return false; }
         }
 
+        static string OnOffTight(bool on) => on ? "<color=#36FFD0>ON</color>" : "<color=#FF5555>OFF</color>";
+
         void ExplainAutobalance(Player p)
         {
             bool on = EnforceBalance != null && EnforceBalance.Value;
             bool mv = AutoMove != null && AutoMove.Value;
             int max = BalanceMaxDiff != null ? BalanceMaxDiff.Value : 2;
-            TellPlayer(p, "<color=#36FFD0>== Auto-balance (PvP only) ==</color>");
-            TellPlayer(p, $"Teams are kept within {max} of each other. If you join the side that already has more players you're moved straight to spectate (no warning) - just reopen the map and join the smaller side.");
-            // 1.2.0: quote the REAL pre-move hold (Balance.WarnSeconds), not the retired Balance.GraceSeconds.
-            // Same expression MaybeBalance uses for its in-match broadcast, so !autobalance and the broadcast
-            // can never disagree (450s -> both say 8 min; the old integer division would have said 7).
-            if (mv) { int gmin = Mathf.Max(1, Mathf.RoundToInt((BalanceWarnSeconds != null ? BalanceWarnSeconds.Value : 300) / 60f));
-                TellPlayer(p, $"When someone LEAVES and a side ends up more than {max} ahead, the server waits ~{gmin} min (in case the gap fills back in), then switches ONE player to the smaller side - picking whoever keeps both teams' total rank as even as possible." + ((BalanceMoveOnlyGrounded == null || BalanceMoveOnlyGrounded.Value) ? " If they are AIRBORNE you are told first and the switch waits until you land or die, so a sortie is not cut short"
-                 + ((BalancePendingTimeout != null && BalancePendingTimeout.Value > 0)
-                    ? $" (up to {(BalancePendingTimeout.Value >= 60 ? Mathf.RoundToInt(BalancePendingTimeout.Value / 60f) + " min" : BalancePendingTimeout.Value + " s")}, after which it applies anyway)." : ".") : " Airborne picks are switched mid-flight.")); }
-            else    TellPlayer(p, "Auto-move is currently OFF (join-blocking only).");
-            TellPlayer(p, "New pilots (first ~15 min) are never moved.");
-            // Gated on the live setting, not stated unconditionally: this list has lied to players before
-            // by quoting a rule the balancer was not actually applying (the retired GraceSeconds), and an
-            // exemption nobody can see in game is exactly the kind of thing that reads as favouritism.
-            if (mv && (BalanceNeverMoveTop == null || BalanceNeverMoveTop.Value))
-                TellPlayer(p, "Each team's <color=#FFD200>top scorer this match</color> is never auto-balanced.");
-            TellPlayer(p, $"<color=#FFC857>Co-op (PvE) is never balanced.</color>  Status: {(on ? "ON" : "OFF")}.");
+            // One short line per rule, so nothing wraps. Every rule is read from the live settings, so the list never
+            // quotes a rule the balancer isn't applying (an exemption nobody can see in game reads as favouritism).
+            const string g = "<color=#CFCFCF>", e = "</color>";
+            TellPlayer(p, "<color=#36FFD0>Auto-balance</color> " + g + "(PvP only) |" + e + " " + OnOffTight(on));
+            TellPlayer(p, $"{g}Teams are kept within {max} players of each other.{e}");
+            TellPlayer(p, $"{g}Join the side with more players and you're sent to spectate.{e}");
+            TellPlayer(p, $"{g}Just reopen the map and join the smaller side.{e}");
+            if (mv)
+            {
+                // 1.2.0: quote the REAL pre-move hold (Balance.WarnSeconds), same expression MaybeBalance broadcasts.
+                int gmin = Mathf.Max(1, Mathf.RoundToInt((BalanceWarnSeconds != null ? BalanceWarnSeconds.Value : 300) / 60f));
+                TellPlayer(p, $"{g}If a team gets more than {max} ahead, one player is moved after ~{gmin} min.{e}");
+                TellPlayer(p, $"{g}The player moved is picked to keep both teams' ranks even.{e}");
+                if (BalanceMoveOnlyGrounded == null || BalanceMoveOnlyGrounded.Value)
+                {
+                    string cap = (BalancePendingTimeout != null && BalancePendingTimeout.Value > 0)
+                        ? $" (up to {(BalancePendingTimeout.Value >= 60 ? Mathf.RoundToInt(BalancePendingTimeout.Value / 60f) + " min" : BalancePendingTimeout.Value + " s")})" : "";
+                    TellPlayer(p, $"{g}If they're flying, they're moved after they land or die{cap}.{e}");
+                }
+                else TellPlayer(p, $"{g}Flying players are moved mid flight.{e}");
+            }
+            else TellPlayer(p, $"{g}Auto-move is off right now (join blocking only).{e}");
+            // the new-joiner window is Balance.NewJoinerSeconds (IsNewJoiner); 0 = no such protection
+            int nj = BalanceNewJoinerSeconds != null ? BalanceNewJoinerSeconds.Value : 900;
+            bool top = mv && (BalanceNeverMoveTop == null || BalanceNeverMoveTop.Value);
+            var never = new List<string>();
+            if (nj > 0) never.Add($"new pilots (first {Mathf.Max(1, Mathf.RoundToInt(nj / 60f))} min)");
+            if (top) never.Add("each team's top scorer");
+            if (never.Count > 0) TellPlayer(p, $"{g}Never moved: {string.Join(" and ", never)}.{e}");
+            TellPlayer(p, "<color=#FFC857>Co-op (PvE) is never balanced.</color>");
         }
         // ================= end force-move / auto-balance =================
 
         // -------- chat reformat --------
         static long _rankStatNext;   // 1.9.5: the file is looked at most once a second (many callers run per chat line, kill and name)
+        // Rank tag for the game's server tag (ChatApi.SyncTags): the rank shorthand in its rank colour, the same "[ABBR]"
+        // the custom chat shows. Null when the bot has pushed no rank, so a guessed rank never shows.
+        internal static string RankTagFor(Player p)
+        {
+            LoadRankMap();
+            if (!RankMap.TryGetValue(Sid(p), out var rc) || string.IsNullOrEmpty(rc.label)) return null;
+            string label = SafeText(rc.label).Trim();
+            string col = (rc.color ?? "").Trim();
+            bool hex = col.Length == 7 && col[0] == '#';
+            for (int i = 1; hex && i < 7; i++) hex = Uri.IsHexDigit(col[i]);
+            return hex ? "<color=" + col + ">" + label + "</color>" : label;
+        }
+
         static void LoadRankMap()
         {
             try
@@ -7699,6 +7752,10 @@ namespace NukeStats
                 {
                     string probe = (message ?? "").TrimStart();
                     if (probe.StartsWith("!")) return false;
+                    // A ballot vote can be just the number: a bare 1 or 2 digit line takes the native path like
+                    // "!3" always has, so the bot reads it off the same console line.
+                    string bare = probe.TrimEnd();
+                    if (bare.Length >= 1 && bare.Length <= 2 && char.IsDigit(bare[0]) && char.IsDigit(bare[bare.Length - 1])) return false;
                 }
                 if (!BindChatGuards()) return false;                          // bind failure -> native (fail-open)
 
@@ -7717,10 +7774,29 @@ namespace NukeStats
                 // (A per-viewer blue/red variant was added in 1.3.9 and reverted in 1.3.12:
                 // chat was working as intended.)
                 string col = ChatFactionHex(hq);
-                string name = Prefixed(sid, raw);                         // 32-char cap trims the raw tail, never the tag
-                string line = allChat
-                    ? $"<color={col}>{SafeText(name)}:</color> {SafeText(message)}"
-                    : $"<color=#008FFF>(ally) {SafeText(name)}: {SafeText(message)}</color>";
+                string line;
+                LoadRankMap();
+                if (RankMap.TryGetValue(sid, out var rcR) && !string.IsNullOrEmpty(rcR.label))
+                {
+                    // the rank in its rank colour inside name-coloured brackets, as the game draws its server tag.
+                    // Same 32-char cap rule as Prefixed: trim the raw tail, never the tag (room < 1 keeps the raw name,
+                    // so Substring can never throw and disable the reroute).
+                    string abbr = SafeText(rcR.label);
+                    int room = 32 - (abbr.Length + 3);
+                    string tail = (room < 1 || raw.Length <= room) ? raw : raw.Substring(0, room);
+                    if (tail.Length > 0 && char.IsHighSurrogate(tail[tail.Length - 1])) tail = tail.Substring(0, tail.Length - 1);
+                    string rCol = HexOr(rcR.color, allChat ? col : "#008FFF");
+                    line = allChat
+                        ? $"<color={col}>[</color><color={rCol}>{abbr}</color><color={col}>] {SafeText(tail)}:</color> {SafeText(message)}"
+                        : $"<color=#008FFF>(ally) [</color><color={rCol}>{abbr}</color><color=#008FFF>] {SafeText(tail)}: {SafeText(message)}</color>";
+                }
+                else
+                {
+                    string name = Prefixed(sid, raw);                         // 32-char cap trims the raw tail, never the tag
+                    line = allChat
+                        ? $"<color={col}>{SafeText(name)}:</color> {SafeText(message)}"
+                        : $"<color=#008FFF>(ally) {SafeText(name)}: {SafeText(message)}</color>";
+                }
 
                 // 1.1.37: a rerouted line never reaches the game's native chat log, so ordinary
                 // chat left ZERO server-side record (moderation/evidence blind spot). Log it here.
@@ -8062,6 +8138,7 @@ namespace NukeStats
             NukeStatsPlugin.Trace("SetAircraftPatch");
             if (!_fired) { _fired = true; NukeStatsPlugin.Log?.LogInfo("[diag] SetAircraft hooked (spawn probation check)"); }
             NukeStatsPlugin.Instance?.OnPlayerSpawned(__instance);   // eject over-stackers who spawn anyway
+            Points.OnSpawn(__instance);                              // 2.1.0: spawn time for the deploy gate
         }
     }
 
@@ -8239,6 +8316,7 @@ namespace NukeStats
     {
         static void Prefix(Aircraft __instance)
         {
+            Points.OnReturnToInventory(__instance);                  // 2.1.0: collected pilots returned (never throws)
             try { NukeStatsPlugin.NoteAbandonedReturn(__instance); } catch { }
         }
     }
@@ -8327,7 +8405,7 @@ namespace NukeStats
         [ThreadStatic] internal static bool Suppressed;
         static bool _fired;
         // bind missionType by name (Harmony matches the original's 5th parameter)
-        static bool Prefix(Player player, float rewardScore, object missionType)
+        static bool Prefix(Player player, Unit target, ref float rewardScore, object missionType)   // 2.1.0: ref score + target (Points)
         {
             NukeStatsPlugin.Trace("RewardPlayerPrefix");
             int mt;
@@ -8343,11 +8421,13 @@ namespace NukeStats
                         _fired = true;
                         NukeStatsPlugin.Log?.LogInfo("[diag] recon/jamming score is VANILLA (per-player breaker armed; Recon.SuppressAll mutes everyone)");
                     }
+                    Points.Rescore(player, target, ref rewardScore, mt);   // 2.1.0: the bonus value when Points is on
                     return true;   // pay it, exactly as the base game would
                 }
                 Suppressed = true;
                 return false;      // blocked player -> no score, no funds, no popup
             }
+            Points.Rescore(player, target, ref rewardScore, mt);   // 2.1.0: repairs, pilots, captures when Points is on
             return true;
         }
     }
@@ -8508,7 +8588,7 @@ namespace NukeStats
             if (!_fired) { _fired = true; NukeStatsPlugin.Log?.LogInfo("[diag] ServerMissionStartPlayer hooked (rank floor)"); }
             try
             {
-                if (!ReferenceEquals(_lastMission, __0)) { _lastMission = __0; NukeStatsPlugin.AdvanceGame(); NukeStatsPlugin.ClearMatchTeamkills(); NukeStatsPlugin.ResetMatchEnded(); NukeStatsPlugin.ResetReconMeters(); NukeStatsPlugin.ClearForfeitVotes(); NukeStatsPlugin.ResetCatchup(); NukeStatsPlugin.ResetRankFunds(); }  // new game -> advance balance move-exemption + reset teamkill + forfeit + catch-up + rank funds (1.1.29: PvP-suppression id set removed)
+                if (!ReferenceEquals(_lastMission, __0)) { _lastMission = __0; NukeStatsPlugin.AdvanceGame(); NukeStatsPlugin.ClearMatchTeamkills(); NukeStatsPlugin.ResetMatchEnded(); NukeStatsPlugin.ResetReconMeters(); NukeStatsPlugin.ClearForfeitVotes(); NukeStatsPlugin.ResetCatchup(); NukeStatsPlugin.ResetRankFunds(); Points.Reset(); }  // new game -> advance balance move-exemption + reset teamkill + forfeit + catch-up + rank funds + Points (1.1.29: PvP-suppression id set removed)
                 if (__0 == null || __1 == null || __0.missionSettings == null) return;
                 int baseWant = __0.missionSettings.playerStartingRank;
                 // PvP matches (Escalation/Terminal): floor EVERY player to PvpStartingRank, on top of the

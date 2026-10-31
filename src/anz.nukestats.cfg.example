@@ -3,7 +3,7 @@
 ## generate one from your feature choices. Tune everything LIVE in the web CC Settings menu.
 
 [Admin]
-## Comma-separated SteamIDs allowed to use in-game team commands (!move/!spec/!join/!balance).
+## Comma-separated SteamIDs allowed to use in-game team commands (!move/!spec/!join/!balance). They also get the game's Admin level when they join.
 SteamIds = 
 
 
@@ -64,6 +64,15 @@ CustomChat = true
 
 ## Replaces a whole message with a canned line if it contains a racist slur; ordinary swearing is left alone.
 ProfanityFilter = true
+
+## Sets each player's server tag to their rank (rank only). Players see it only with server tags turned on in the game's chat settings.
+RankServerTag = true
+
+## Registers the "nukestats" remote command on the game's remote-command port, so the bot can send plugin commands without plugin_cmd files. Anyone who can reach that port can run plugin commands, and in the standard setup the relay port is reachable from the internet. Turn this off if you don't want that: the bot then uses plugin_cmd files. Needs a restart.
+RemoteCommand = true
+
+## Registers the plugin's and the bot's commands as the game's own "/" commands ("!" still works). Needs a restart.
+SlashCommands = true
 
 
 [Cleanup]
@@ -126,6 +135,38 @@ MaxPingMs = 250
 PvEPlayers = 12
 
 PvPPlayers = 14
+
+
+[Points]
+## Change the in-game score for pilots, repairs, deploys, supply drops, spotting and jamming bonuses and base captures to the values below. Funds stay as the game pays them. OFF = the game's own score. The amounts below only apply once this is on.
+Enabled = false
+
+## Score per downed pilot collected (rescued or captured), replacing the game's 2 or 3 x (1 + rank).
+PilotCollected = 10
+
+## Score per collected pilot returned: the collecting aircraft lands at a friendly airbase or carrier.
+PilotReturned = 40
+
+## Score per completed repair, replacing the game's value. No limit.
+Repair = 25
+
+## Score per unit deployed from cargo (gated by DeployGateSeconds).
+DeployUnit = 25
+
+## Score per naval supply or ammo drop (gated by DeployGateSeconds).
+SupplyDrop = 25
+
+## Deploys and supply drops only score from this many seconds after the dropping aircraft spawned.
+DeployGateSeconds = 120
+
+## Score per spotting bonus (the game pays it when the spotting threshold is reached), replacing the game's value.
+ReconBonus = 5
+
+## Score per jamming bonus, replacing the game's value.
+JammingBonus = 15
+
+## Score per player credited with a base capture, replacing the game's share.
+Capture = 150
 
 
 [PvE]
