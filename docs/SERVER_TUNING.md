@@ -55,6 +55,20 @@ This is why the best worker count is usually about the number of fast cores left
 capped at around four, and why two or three workers often measure the same as four. How much physics there is (AI,
 vehicles, ships) and how fast each core is move it up or down, which is what the tester measures.
 
+### On a rented server
+
+A rented server usually sees the whole chip but is only allowed part of its time. I tested two on a Ryzen 7 5800X (8
+cores, 16 threads), one held to 3 CPUs' worth and one to 5. The game still sees all 16 threads, so pinning it to fewer
+cores can't help.
+
+At 20 AI every worker count held about the same frame rate on both. At 40 AI on the 5 CPU server, 7 workers did best
+(69.6 fps) with the game's own 8 close behind (67.0), and 2 or 3 workers did worst (48 to 54 fps). The 3 CPU server had
+no time to spare at 40 AI whatever it was set to.
+
+So on a rented server set `JobWorkers` to the chip's core count minus one (7 on an 8 core chip), or leave it to the
+game. Fewer workers to match the CPU limit doesn't help. What the limit does decide is how much AI the server can
+carry: on 3 CPUs, keep it nearer 20 AI than 40.
+
 ### Why a higher frame target helps, then stops helping
 
 The server reads players' messages and sends out what it has queued once a frame, so a higher target answers
