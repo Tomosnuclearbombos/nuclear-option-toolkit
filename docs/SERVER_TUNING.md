@@ -62,16 +62,18 @@ cores, 16 threads), one held to 3 CPUs' worth and one to 5. The game still sees 
 cores can't help.
 
 At 20 AI every worker count held about the same frame rate on both. At 40 AI on the 5 CPU server, 7 workers did best
-(69.6 fps) with the game's own 8 close behind (67.0), and 2 or 3 workers did worst (48 to 54 fps). The 3 CPU server had
-no time to spare at 40 AI whatever it was set to.
+(69.6 fps) with the game's own 8 close behind (67.0), and 2 or 3 workers did worst (48 to 54 fps). A second run with
+both servers at once agreed: at 40 AI, 8 workers held 78 to 84 fps on both and 2 workers 67 to 77.
 
 So on a rented server set `JobWorkers` to the chip's core count minus one (7 on an 8 core chip), or leave it to the
 game. Fewer workers to match the CPU limit doesn't help.
 
-The 3 CPU server ran slower than the 5 CPU one at the same load, but not because of its limit: it was held back for half
-a second in 25 minutes, and the server used less than half its allowance. Its main thread was simply slower at the same
-clock speed, most likely from other customers on the same machine, which you can't see or change from inside your
-server. If yours is slow while it stays well under its limit, that's the likely cause, and a bigger plan won't fix it.
+In the first runs the 3 CPU server was slower than the 5 CPU one at the same load, with no time to spare at 40 AI, but
+not because of its limit: it was held back for half a second in 25 minutes, and the server used less than half its
+allowance. Run side by side at the same time with the same settings, the two were equally fast, and the limit held
+neither of them back at all. So the slowdown came and went with the machine, most likely from other customers on it,
+which you can't see or change from inside your server. If yours is slow while it stays well under its limit, that's the
+likely cause, and a bigger plan won't fix it. Test at a few different times of day before you judge a plan or a setting.
 
 ### Why a higher frame target helps, then stops helping
 
